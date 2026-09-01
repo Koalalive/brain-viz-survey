@@ -38,10 +38,21 @@ INJECT_JS = r"""
       cam.setFocalPoint(CAM_INIT.focal[0], CAM_INIT.focal[1], CAM_INIT.focal[2]);
       cam.setViewUp(CAM_INIT.up[0], CAM_INIT.up[1], CAM_INIT.up[2]);
       cam.setClippingRange(CAM_INIT.clip[0], CAM_INIT.clip[1]);
-      var rw = getRW();
-      if (rw && rw.render) rw.render();
     } catch (e) {
       console.log('cam apply err', e);
+    }
+    // 关键: 激活鼠标交互 (vtk.js style 需要 currentRenderer)
+    try {
+      var rw = getRW();
+      var it = rw.getInteractor();
+      it.setCurrentRenderer(rw.getRenderers()[0]);
+      var cvs = document.querySelector('#vtk-root canvas');
+      it.setContainer(cvs);
+      it.bindEvents(cvs);
+      it.setEnabled(true);
+      if (rw.render) rw.render();
+    } catch (e) {
+      console.log('interactor err', e);
     }
   }
 
