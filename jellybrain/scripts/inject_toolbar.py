@@ -17,68 +17,83 @@ INJECT_JS = r"""
 <script>
 /* ================= jellybrain 导出工具栏 + DOM 标签 ================= */
 (function() {
-    // ---------- 亚区标签配置 (名称 + 网络色) ----------
-  // 3D 文字标签由 vtkTextActor3D 渲染 (跟随旋转锚定核团);
-  // 额外提供 DOM 标签层 (跟随旋转 + 可开关显隐) — 使用 vtk worldToDisplay.
+    // ---------- 亚区标签: DOM 层 (纯文字无气泡, 黑字白描边, 跟随旋转) ----------
+  // vtkTextActor3D 在 vtk.js 导出不渲染, 故用 DOM + worldToDisplay 投影 (跟随旋转).
   var SUBREGIONS = window.JB_SUBREGIONS || [];
-  var DOM_LABELS = [];   // 已创建的 DOM 标签元素 (带世界坐标)
+  var DOM_LABELS = [];
   function getVtkView() {
-    // OfflineLocalView 全局实例
     var OLV = window.OfflineLocalView;
-    if (OLV && OLV.view) return OLV.view;
-    // 尝试内部引用: view 常挂 _view 或被 getView 获得
-    try {
-      if (OLV && OLV.getView) return OLV.getView();
-    } catch (e) {}
+    if (!OLV) return null;
+    // 多次尝试: OfflineLocalView 实例属性
+    for (var k in OLV) {
+      if (OLV[k] && typeof OLV[k] === 'object' && OLV[k].worldToDisplay) {
+        return OLV[k];
+      }
+    }
     return null;
   }
   function worldToScreen(pt, w, h) {
     var view = getVtkView();
     if (view && view.worldToDisplay) {
-      var out = view.worldToDisplay(pt);
-      if (out) return {x: out[0], y: h - out[1]};
+      try {
+        var out = view.worldToDisplay(pt);
+        if (out) {
+          return {x: out[0], y: h - out[1], depth: out[2]};
+        }
+      } catch (e) {}
     }
-    return projectPoint(pt[0], pt[1], pt[2], w, h);
+    // fallback: 数学投影
+    var p = projectPoint(pt[0], pt[1], pt[2], w, h);
+    return {x: p.x, y: p.y, depth: p.depth};
   }
   function updateDomLabels() {
     if (!DOM_LABELS.length) return;
     var w = window.innerWidth, h = window.innerHeight;
+    var placed = [];
     DOM_LABELS.forEach(function(l) {
       var p = worldToScreen([l.wx, l.wy, l.wz], w, h);
-      l.el.style.left = p.x + 'px';
-      l.el.style.top = p.y + 'px';
-      l.el.style.zIndex = String(9999 - Math.floor((l.depth || 0) / 10));
+      // 防重叠: 与已布置标签碰撞则向下错开
+      var lx = p.x, ly = p.y;
+      var ew = l.el.offsetWidth || 40, eh = l.el.offsetHeight || 16;
+      var tries = 0;
+      while (placed.some(function(r) {
+        return Math.abs(lx - r.x) < (ew + r.w) / 2 + 4 &&
+               Math.abs(ly - r.y) < (eh + r.h) / 2 + 3;
+      })) {
+        ly += 22;
+        if (++tries > 25) break;
+      }
+      placed.push({x: lx, y: ly, w: ew, h: eh});
+      l.el.style.left = lx + 'px';
+      l.el.style.top = ly + 'px';
     });
   }
   function subInjected() {
     if (!SUBREGIONS.length) return;
     var canv = document.querySelector('#vtk-root canvas, canvas');
     if (!canv) return;
-    var w = window.innerWidth, h = window.innerHeight;
     SUBREGIONS.forEach(function(sr) {
       var el = document.createElement('div');
       el.className = 'jb-label';
       el.textContent = sr[3];
-      // 纯色简约: Arial, 纯色底板, 无阴影/渐变/边框
+      // 纯文字无气泡: 黑字 + 白描边 (可读性), 无底板
       el.style.cssText =
         'position:fixed;z-index:9998;transform:translate(-50%,-50%);' +
-        'padding:4px 10px;border-radius:3px;' +
-        'font:600 13px Arial, "Helvetica Neue", sans-serif;' +
-        'background:' + sr[4] + ';color:' + sr[5] + ';' +
-        'white-space:nowrap;letter-spacing:.3px;';
+        'font:700 14px Arial, "Helvetica Neue", sans-serif;' +
+        'color:#000;text-shadow:-1px -1px 0 #fff,1px -1px 0 #fff,' +
+        '-1px 1px 0 #fff,1px 1px 0 #fff,0 0 3px #fff;' +
+        'white-space:nowrap;user-select:none;pointer-events:none;';
       document.body.appendChild(el);
       DOM_LABELS.push({el: el, wx: sr[0], wy: sr[1], wz: sr[2]});
     });
-    // 每帧更新 (跟随旋转): 用 vtk 渲染事件或 RAF 轮询
     var lastT = 0;
     function tick() {
       var now = Date.now();
-      if (now - lastT > 200) { updateDomLabels(); lastT = now; }
+      if (now - lastT > 150) { updateDomLabels(); lastT = now; }
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
-    // 交互结束立即更新
-    ["mouseup", "touchend", "wheel"].forEach(function(ev) {
+    ["mouseup", "touchend", "wheel", "mousemove"].forEach(function(ev) {
       window.addEventListener(ev, function() { updateDomLabels(); }, true);
     });
     if (!window.__jb_legend_added) {
@@ -176,20 +191,11 @@ INJECT_JS = r"""
       '<button id="jb-png">PNG</button> ' +
       '<button id="jb-pdf">PDF</button> ' +
       '<button id="jb-tif">TIF</button>' +
-      '&nbsp;|&nbsp;' +
-      '<label><input type="checkbox" id="jb-toggle-labels" checked> 标签</label>' +
+      '&nbsp;|&nbsp;图例右下角可折叠' +
       '&nbsp;<span id="jb-hint" style="color:#888"></span>';
     document.body.appendChild(bar);
 
     var hint = document.getElementById('jb-hint');
-    // 标签显隐开关 (控制 DOM 标签层; 3D 文本字形由 vtkTextActor3D 控制)
-    var lblToggle = document.getElementById('jb-toggle-labels');
-    lblToggle.addEventListener('change', function() {
-      var visible = lblToggle.checked;
-      document.querySelectorAll('.jb-label').forEach(function(el) {
-        el.style.display = visible ? '' : 'none';
-      });
-    });
     function snap() {
       var canv = document.querySelector('#vtk-root canvas, canvas');
       if (!canv) { hint.textContent = '未找到画布'; return null; }
@@ -216,55 +222,98 @@ INJECT_JS = r"""
     };
     document.getElementById('jb-pdf').onclick = function() {
       var c = snap(); if (!c) return;
-      if (!window.jspdf && !window.jsPDF) {
-        var s = document.createElement('script');
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-        s.onload = function() { pdfExport(c); };
-        document.head.appendChild(s);
-      } else pdfExport(c);
-      function pdfExport(canv) {
-        var J = window.jspdf ? window.jspdf.jsPDF : window.jsPDF;
-        var img = canv.toDataURL('image/png');
-        var w = canv.width, h = canv.height;
-        var pdf = new J('p', 'px', [w, h]);
-        pdf.addImage(img, 'PNG', 0, 0, w, h);
-        pdf.save('insula_view.pdf');
+      var img = c.toDataURL('image/jpeg', 0.95);
+      var jpeg = atob(img.split(',')[1]);
+      var jlen = jpeg.length;
+      var w = c.width, h = c.height;
+      var objects = [];
+      objects.push('<< /Type /Catalog /Pages 2 0 R >>');
+      objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+      objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + w + ' ' + h +
+                   '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
+      objects.push('<< /Type /XObject /Subtype /Image /Width ' + w +
+                   ' /Height ' + h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8' +
+                   ' /Filter /DCTDecode /Length ' + jlen + ' >>\nstream\n' +
+                   jpeg + '\nendstream');
+      var stream = 'q ' + w + ' 0 0 ' + h + ' 0 0 cm /Im0 Do Q';
+      objects.push('<< /Length ' + stream.length + ' >>\nstream\n' +
+                   stream + '\nendstream');
+      var pdf = '%PDF-1.4\n';
+      var offsets = [];
+      for (var i = 0; i < objects.length; i++) {
+        offsets.push(pdf.length);
+        pdf += (i + 1) + ' 0 obj\n' + objects[i] + '\nendobj\n';
       }
+      var xrefPos = pdf.length;
+      pdf += 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n';
+      offsets.forEach(function(o) {
+        pdf += ('0000000000' + o).slice(-10) + ' 00000 n \n';
+      });
+      pdf += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\n' +
+             'startxref\n' + xrefPos + '\n%%EOF';
+      download(new Blob([pdf], {type: 'application/pdf'}), 'insula_view.pdf');
     };
     document.getElementById('jb-tif').onclick = function() {
       var c = snap(); if (!c) return;
-      if (!window.TIFF) {
-        var s = document.createElement('script');
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/tiff/0.1.2/tiff.min.js';
-        s.onload = function() { tifExport(c); };
-        document.head.appendChild(s);
-      } else tifExport(c);
-      function tifExport(canv) {
-        var img = canv.toDataURL('image/png');
-        var imgEl = new Image();
-        imgEl.onload = function() {
-          var c2 = document.createElement('canvas');
-          c2.width = imgEl.width; c2.height = imgEl.height;
-          c2.getContext('2d').drawImage(imgEl, 0, 0);
-          var tiff = new window.TIFF();
-          var ifd = new window.TIFF.ImageIFD(c2.width, c2.height);
-          var ctx = c2.getContext('2d');
-          var data = ctx.getImageData(0, 0, c2.width, c2.height).data;
-          ifd.width = c2.width; ifd.height = c2.height;
-          ifd.bitsPerSample = [8, 8, 8];
-          ifd.samplesPerPixel = 3;
-          ifd.photometricInterpretation = 2;
-          ifd.stripOffsets = [0];
-          ifd.rowsPerStrip = c2.height;
-          ifd.stripByteCounts = [data.length];
-          ifd.data = data;
-          var buf = tiff.encodeDirectory(ifd);
-          var arr = new Uint8Array(buf);
-          var blob = new Blob([arr], {type: 'image/tiff'});
-          download(blob, 'insula_view.tif');
-        };
-        imgEl.src = img;
-      }
+      // WebGL canvas: 用 toDataURL -> 2D canvas (保证可读像素)
+      var imgEl = new Image();
+      imgEl.onload = function() {
+        var c2 = document.createElement('canvas');
+        c2.width = imgEl.width; c2.height = imgEl.height;
+        var ctx = c2.getContext('2d');
+        ctx.drawImage(imgEl, 0, 0);
+        var imgData = ctx.getImageData(0, 0, c2.width, c2.height).data;
+        var w = c2.width, h = c2.height;
+        var rowBytes = w * 3;
+        var stripLen = rowBytes * h;
+        // 最小标准 TIFF: 8 header + 2 count + 14*12 entries + 4 nextIFD
+        var data = new Uint8Array(8 + 2 + 14 * 12 + 4 + stripLen);
+        var dv = new DataView(data.buffer);
+        data[0] = 0x49; data[1] = 0x49; data[2] = 42; data[3] = 0;
+        dv.setUint32(4, 8, true);          // IFD offset = 8
+        var ifd = 8;
+        dv.setUint16(ifd, 14, true);       // entry count = 14
+        var e = ifd + 2;
+        var dataStart = ifd + 2 + 14 * 12 + 4;
+        function w16(off, v) { dv.setUint16(off, v, true); }
+        function w32(off, v) { dv.setUint32(off, v, true); }
+        // 写条目: 所有 count=1 直接把值放 offset 字段 (SHORT 低16位)
+        function E(tag, type, count, value) {
+          w16(e, tag); w16(e + 2, type); w32(e + 4, count);
+          if (type === 3 && count === 1) {
+            w16(e + 8, value); w16(e + 10, 0);
+          } else {
+            w32(e + 8, value);
+          }
+          e += 12;
+        }
+        E(256, 4, 1, w);              // ImageWidth
+        E(257, 4, 1, h);              // ImageLength
+        E(258, 3, 1, 8);              // BitsPerSample = 8 (单值, RGB 共用)
+        E(259, 3, 1, 1);              // Compression = none
+        E(262, 3, 1, 2);              // Photometric = RGB
+        E(273, 4, 1, dataStart);      // StripOffsets
+        E(277, 3, 1, 3);              // SamplesPerPixel = 3
+        E(278, 4, 1, h);              // RowsPerStrip
+        E(279, 4, 1, stripLen);       // StripByteCounts
+        E(282, 3, 1, 72);             // XResolution (SHORT 近似)
+        E(283, 3, 1, 72);             // YResolution
+        E(284, 3, 1, 1);              // PlanarConfig = 1
+        E(296, 3, 1, 2);              // ResolutionUnit = inch
+        E(305, 2, 1, 0);              // Software (空)
+        w32(ifd + 2 + 14 * 12, 0);    // next IFD = 0
+        for (var i = 0; i < h; i++) {
+          for (var x = 0; x < w; x++) {
+            var src = (i * w + x) * 4;
+            var dst = dataStart + i * rowBytes + x * 3;
+            data[dst] = imgData[src];
+            data[dst + 1] = imgData[src + 1];
+            data[dst + 2] = imgData[src + 2];
+          }
+        }
+        download(new Blob([data], {type: 'image/tiff'}), 'insula_view.tif');
+      };
+      imgEl.src = c.toDataURL('image/png');
     };
   }
 
