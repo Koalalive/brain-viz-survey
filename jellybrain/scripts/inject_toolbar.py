@@ -1,64 +1,110 @@
 # -*- coding: utf-8 -*-
-"""在 trame viewer HTML 注入自定义导出工具栏 (PNG/PDF/TIF).
+"""inject_toolbar 重写: 截图走 renderWindow.captureImages, 标签投影走相机矩阵.
 
-利用 trame-vtk viewer 的 canvas + captureImages API:
-  - 导出 PNG: 当前视角 canvas 截图
-  - 导出 PDF: PNG -> jsPDF (CDN)
-  - 导出 TIF: PNG -> tiff-js (CDN)
-注入点: </body> 之前.
+核心改动:
+  1. 截图:    window.global.renderWindow.captureImages('image/png') -> dataURL
+              (修复 PDF 空白: canvas.toDataURL 在 WebGL 上为空白, captureImages 走 vtk 管线)
+  2. 标签跟随: renderer.getActiveCamera() 的 getViewMatrix + getProjectionMatrix
+              手算 worldToDisplay, 每 150ms 刷新 -> 旋转时标签跟随.
 """
-import re
-import sys
 import os
+import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(__file__))
 
 INJECT_JS = r"""
 <script>
-/* ================= jellybrain 导出工具栏 + DOM 标签 ================= */
+/* ================= jellybrain 导出工具栏 + 标签投影 (via renderWindow) ================= */
 (function() {
-    // ---------- 亚区标签: DOM 层 (纯文字无气泡, 黑字白描边, 跟随旋转) ----------
-  // vtkTextActor3D 在 vtk.js 导出不渲染, 故用 DOM + worldToDisplay 投影 (跟随旋转).
   var SUBREGIONS = window.JB_SUBREGIONS || [];
   var DOM_LABELS = [];
-  function getVtkView() {
-    var OLV = window.OfflineLocalView;
-    if (!OLV) return null;
-    // 多次尝试: OfflineLocalView 实例属性
-    for (var k in OLV) {
-      if (OLV[k] && typeof OLV[k] === 'object' && OLV[k].worldToDisplay) {
-        return OLV[k];
-      }
-    }
-    return null;
+  var CAM_INIT = window.JB_CAM || null;   // {pos:.., focal:.., up:..}
+
+  function getRW() {
+    return (window.global && window.global.renderWindow) ? window.global.renderWindow : null;
   }
-  function worldToScreen(pt, w, h) {
-    var view = getVtkView();
-    if (view && view.worldToDisplay) {
-      try {
-        var out = view.worldToDisplay(pt);
-        if (out) {
-          return {x: out[0], y: h - out[1], depth: out[2]};
-        }
-      } catch (e) {}
-    }
-    // fallback: 数学投影
-    var p = projectPoint(pt[0], pt[1], pt[2], w, h);
-    return {x: p.x, y: p.y, depth: p.depth};
+  function getCam() {
+    var rw = getRW();
+    if (!rw) return null;
+    var ren = rw.getRenderers && rw.getRenderers()[0];
+    return ren ? ren.getActiveCamera() : null;
   }
+  function applyInitCam() {
+    if (!CAM_INIT) return;
+    var cam = getCam();
+    if (!cam) return;
+    try {
+      cam.setPosition(CAM_INIT.pos[0], CAM_INIT.pos[1], CAM_INIT.pos[2]);
+      cam.setFocalPoint(CAM_INIT.focal[0], CAM_INIT.focal[1], CAM_INIT.focal[2]);
+      cam.setViewUp(CAM_INIT.up[0], CAM_INIT.up[1], CAM_INIT.up[2]);
+      cam.setClippingRange(CAM_INIT.clip[0], CAM_INIT.clip[1]);
+      var rw = getRW();
+      if (rw && rw.render) rw.render();
+    } catch (e) {
+      console.log('cam apply err', e);
+    }
+  }
+
+  /* ---- 相机矩阵投影 (vtk: world -> view -> NDC -> screen) ---- */
+  function matMul(a, b) { // 4x4 列主序相乘
+    var r = new Array(16);
+    for (var c = 0; c < 4; c++) for (var rw_ = 0; rw_ < 4; rw_++) {
+      var s = 0;
+      for (var k = 0; k < 4; k++) s += a[k*4+rw_] * b[c*4+k];
+      r[c*4+rw_] = s;
+    }
+    return r;
+  }
+  function projVec(m, x, y, z, w) {
+    var v = [
+      m[0]*x + m[4]*y + m[8]*z  + m[12]*w,
+      m[1]*x + m[5]*y + m[9]*z  + m[13]*w,
+      m[2]*x + m[6]*y + m[10]*z + m[14]*w,
+      m[3]*x + m[7]*y + m[11]*z + m[15]*w
+    ];
+    return v;
+  }
+  function worldToScreen(x, y, z, w, h) {
+    var cam = getCam();
+    if (!cam) return {x: w/2, y: h/2};
+    // 相机参数 (标准 OpenGL 透视, 不依赖 vtk.js 矩阵内部布局)
+    var pos = cam.getPosition();
+    var foc = cam.getFocalPoint();
+    var up = cam.getViewUp();
+    var vangle = cam.getViewAngle();      // 垂直 FOV (度)
+    var clip = cam.getClippingRange();
+    // 相机基
+    var vx0=foc[0]-pos[0], vy0=foc[1]-pos[1], vz0=foc[2]-pos[2];
+    var vl=Math.sqrt(vx0*vx0+vy0*vy0+vz0*vz0); vx0/=vl; vy0/=vl; vz0/=vl;
+    // right = normalize(cross(v, up))
+    var rx=vy0*up[2]-vz0*up[1], ry=vz0*up[0]-vx0*up[2], rz=vx0*up[1]-vy0*up[0];
+    var rl=Math.sqrt(rx*rx+ry*ry+rz*rz)||1; rx/=rl; ry/=rl; rz/=rl;
+    // t = cross(right, v)
+    var tx=ry*vz0-rz*vy0, ty=rz*vx0-rx*vz0, tz=rx*vy0-ry*vx0;
+    var dx=x-pos[0], dy=y-pos[1], dz=z-pos[2];
+    var cx=dx*rx+dy*ry+dz*rz;      // right
+    var cy=dx*tx+dy*ty+dz*tz;      // up
+    var cz=dx*vx0+dy*vy0+dz*vz0;   // depth (forward +)
+    if (cz <= 0.1) cz = 0.1;
+    var fov = vangle * Math.PI / 180;
+    var tanF = Math.tan(fov/2);
+    var ndcX = (cx/cz) / tanF / (w/h);   // 校正 aspect
+    var ndcY = (cy/cz) / tanF;
+    return {x: (ndcX+1)/2*w, y: (1-ndcY)/2*h, depth: cz};
+  }
+
   function updateDomLabels() {
     if (!DOM_LABELS.length) return;
     var w = window.innerWidth, h = window.innerHeight;
     var placed = [];
     DOM_LABELS.forEach(function(l) {
-      var p = worldToScreen([l.wx, l.wy, l.wz], w, h);
-      // 防重叠: 与已布置标签碰撞则向下错开
+      var p = worldToScreen(l.wx, l.wy, l.wz, w, h);
       var lx = p.x, ly = p.y;
       var ew = l.el.offsetWidth || 40, eh = l.el.offsetHeight || 16;
       var tries = 0;
       while (placed.some(function(r) {
-        return Math.abs(lx - r.x) < (ew + r.w) / 2 + 4 &&
-               Math.abs(ly - r.y) < (eh + r.h) / 2 + 3;
+        return Math.abs(lx - r.x) < (ew + r.w)/2 + 4 &&
+               Math.abs(ly - r.y) < (eh + r.h)/2 + 3;
       })) {
         ly += 22;
         if (++tries > 25) break;
@@ -68,15 +114,13 @@ INJECT_JS = r"""
       l.el.style.top = ly + 'px';
     });
   }
+
   function subInjected() {
     if (!SUBREGIONS.length) return;
-    var canv = document.querySelector('#vtk-root canvas, canvas');
-    if (!canv) return;
     SUBREGIONS.forEach(function(sr) {
       var el = document.createElement('div');
       el.className = 'jb-label';
       el.textContent = sr[3];
-      // 纯文字无气泡: 黑字 + 白描边 (可读性), 无底板
       el.style.cssText =
         'position:fixed;z-index:9998;transform:translate(-50%,-50%);' +
         'font:700 14px Arial, "Helvetica Neue", sans-serif;' +
@@ -93,21 +137,20 @@ INJECT_JS = r"""
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
-    ["mouseup", "touchend", "wheel", "mousemove"].forEach(function(ev) {
-      window.addEventListener(ev, function() { updateDomLabels(); }, true);
-    });
+    ["mouseup", "touchend", "wheel", "mousemove", "keyup"].forEach(
+      function(ev) { window.addEventListener(ev, function() { updateDomLabels(); }, true); });
     if (!window.__jb_legend_added) {
       window.__jb_legend_added = true;
       add_legend_panel();
     }
   }
 
-  // ---------- 图例面板 (Yeo-7 色卡, 可折叠) ----------
+  /* ---- 图例面板 ---- */
   function add_legend_panel() {
     var leg = document.createElement('div');
     leg.id = 'jb-legend';
     leg.style.cssText =
-      'position:fixed;bottom:12px;right:12px;z-index:9998;' +
+      'position:fixed;bottom:12px;right:12px;z-index:9997;' +
       'background:#ffffffee;padding:10px 14px;border-radius:8px;' +
       'box-shadow:0 1px 4px rgba(0,0,0,.15);font:13px Arial,sans-serif;';
     var items = [
@@ -127,57 +170,94 @@ INJECT_JS = r"""
     });
     leg.innerHTML = html;
     document.body.appendChild(leg);
-    var t = document.getElementById('jb-leg-toggle');
-    t.onclick = function() {
-      var body = leg.innerHTML;
+    document.getElementById('jb-leg-toggle').onclick = function() {
       if (leg.dataset.collapsed) {
-        add_legend_panel(); leg.dataset.collapsed = '';
+        leg.parentNode.removeChild(leg);
+        add_legend_panel();
       } else {
         leg.innerHTML = '<div style="font-weight:700;color:#333">' +
           'Yeo-7 Networks <span id="jb-leg-toggle" style="cursor:pointer;' +
           'color:#888;font-size:11px">[+]</span></div>';
         leg.dataset.collapsed = '1';
-        document.getElementById('jb-leg-toggle').onclick =
-          leg.querySelector('span').onclick = function(){ add_legend_panel(); };
+        document.getElementById('jb-leg-toggle').onclick = function() {
+          leg.parentNode.removeChild(leg);
+          add_legend_panel();
+        };
       }
     };
   }
 
-  // 透视投影: 世界坐标 -> 屏幕 (精确, 与 vtk 透视相机一致)
-  // fov=30° (pyvista 默认), zoom 影响实际 fov: tan(fov/2)/zoom
-  var CAM = window.JB_CAM || null;
-  var FOV_HALF_TAN = Math.tan((30 / 2) * Math.PI / 180);  // 0.2679
-  var ZOOM = 1.0;
-  function projectPoint(x, y, z, w, h) {
-    var pos = CAM ? CAM.pos : [280, -280, 240];
-    var foc = CAM ? CAM.foc : [0, 0, 5];
-    var upv = CAM ? CAM.up : [0, 0, 1];
-    var vx = foc[0] - pos[0], vy = foc[1] - pos[1], vz = foc[2] - pos[2];
-    var vl = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    vx /= vl; vy /= vl; vz /= vl;
-    // r = up x v (右), u = v x r (上)
-    var rx = upv[1] * vz - upv[2] * vy, ry = upv[2] * vx - upv[0] * vz,
-        rz = upv[0] * vy - upv[1] * vx;
-    var ul = Math.sqrt(rx * rx + ry * ry + rz * rz) || 1;
-    rx /= ul; ry /= ul; rz /= ul;
-    var ux = vy * rz - vz * ry, uy = vz * rx - vx * rz, uz = vx * ry - vy * rx;
-    var dx = x - pos[0], dy = y - pos[1], dz = z - pos[2];
-    var cx = dx * rx + dy * ry + dz * rz;
-    var cy = dx * ux + dy * uy + dz * uz;
-    var cz = dx * vx + dy * vy + dz * vz;   // 深度
-    if (cz <= 1) cz = 1;
-    var tanf = FOV_HALF_TAN / ZOOM;
-    var sxp = (cx / cz) / tanf * (h / 2);
-    var syp = (cy / cz) / tanf * (h / 2);
-    return {x: w / 2 + sxp, y: h / 2 - syp, depth: cz};
+  /* ---- 截图: 走 renderWindow.captureImages (真实渲染) ---- */
+  function dataURLtoBlob(du) {
+    var bin = atob(du.split(',')[1]);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], {type: 'image/png'});
+  }
+  function dataURLtoImage(du) {
+    return new Promise(function(res, rej) {
+      var im = new Image();
+      im.onload = function() { res(im); };
+      im.onerror = rej;
+      im.src = du;
+    });
+  }
+  async function captureDataURL() {
+    var rw = getRW();
+    if (!rw || typeof rw.captureImages !== 'function') return null;
+    var imgs = await rw.captureImages('image/png', {});
+    var v = imgs && imgs[0];
+    if (v && typeof v.then === 'function') v = await v;
+    if (typeof v === 'string') return v;             // dataURL
+    if (v instanceof Blob) {
+      return new Promise(function(res) {
+        var fr = new FileReader();
+        fr.onload = function() { res(fr.result); };
+        fr.readAsDataURL(v);
+      });
+    }
+    return null;
   }
 
-  function waitForViewer(cb, tries) {
-    tries = tries || 0;
-    var canv = document.querySelector('#vtk-root canvas, canvas');
-    if (canv) { cb(); return; }
-    if (tries > 200) return;
-    setTimeout(function() { waitForViewer(cb, tries + 1); }, 250);
+  /* ---- 带标签的合成截图: 底图 + DOM 标签 (烘焙) ---- */
+  async function captureWithLabels() {
+    var d = await captureDataURL();
+    if (!d) return null;
+    var img = await dataURLtoImage(d);
+    var c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    var ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    // 画 DOM 标签 (按当前屏幕位置缩放)
+    var scaleX = c.width / window.innerWidth;
+    var scaleY = c.height / window.innerHeight;
+    DOM_LABELS.forEach(function(l) {
+      var el = l.el;
+      var lx = parseFloat(el.style.left) * scaleX;
+      var ly = parseFloat(el.style.top) * scaleY;
+      var txt = el.textContent;
+      ctx.font = '700 14px Arial, sans-serif';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.fillStyle = '#000000';
+      ctx.lineJoin = 'round';
+      ctx.strokeText(txt, lx, ly);
+      ctx.fillText(txt, lx, ly);
+    });
+    return c;
+  }
+  async function captureWithLabelsURL(mime, q) {
+    var c = await captureWithLabels();
+    if (!c) return null;
+    return c.toDataURL(mime, q);
+  }
+
+  function download(blob, name) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
   }
 
   function addToolbar() {
@@ -191,130 +271,127 @@ INJECT_JS = r"""
       '<button id="jb-png">PNG</button> ' +
       '<button id="jb-pdf">PDF</button> ' +
       '<button id="jb-tif">TIF</button>' +
-      '&nbsp;|&nbsp;图例右下角可折叠' +
+      '&nbsp;|&nbsp;<label>旋转: <input type="range" id="jb-azim" ' +
+      'min="0" max="360" step="5" value="45" style="width:120px">deg</label>' +
       '&nbsp;<span id="jb-hint" style="color:#888"></span>';
     document.body.appendChild(bar);
-
     var hint = document.getElementById('jb-hint');
-    function snap() {
-      var canv = document.querySelector('#vtk-root canvas, canvas');
-      if (!canv) { hint.textContent = '未找到画布'; return null; }
-      return canv;
-    }
-    function download(blob, name) {
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = name;
-      a.click();
-      setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
-    }
-    function toBlob(canv, mime, cb) {
-      if (canv.toBlob) { canv.toBlob(cb, mime); }
-      else { cb(null); }
+
+    // 旋转控件: 直接操作相机 (不依赖交互器), 标签随相机投影自动跟随
+    var BASE_POS = (window.JB_CAM && window.JB_CAM.pos) || [280, -280, 240];
+    var BASE_FOC = (window.JB_CAM && window.JB_CAM.focal) || [0, 0, 5];
+    var azim = document.getElementById('jb-azim');
+    azim.addEventListener('input', function() {
+      var deg = parseFloat(azim.value || '45');
+      applyCameraAzimuth(deg);
+    });
+    function applyCameraAzimuth(deg) {
+      var cam = getCam();
+      if (!cam) return;
+      var rad = deg * Math.PI / 180;
+      var dx = BASE_POS[0] - BASE_FOC[0];
+      var dy = BASE_POS[1] - BASE_FOC[1];
+      var dz = BASE_POS[2] - BASE_FOC[2];
+      var r = Math.sqrt(dx*dx + dy*dy);
+      var baseAng = Math.atan2(dy, dx);
+      var nx = BASE_FOC[0] + r * Math.cos(baseAng + rad);
+      var ny = BASE_FOC[1] + r * Math.sin(baseAng + rad);
+      var nz = BASE_FOC[2] + dz;
+      cam.setPosition(nx, ny, nz);
+      cam.setFocalPoint(BASE_FOC[0], BASE_FOC[1], BASE_FOC[2]);
+      cam.setViewUp(0, 0, 1);
+      cam.modified();
+      var rw = getRW();
+      if (rw && rw.render) rw.render();
+      updateDomLabels();
+      hint.textContent = deg + '°';
     }
 
-    document.getElementById('jb-png').onclick = function() {
-      var c = snap(); if (!c) return;
-      toBlob(c, 'image/png', function(b) {
-        if (b) download(b, 'insula_view.png');
-        else hint.textContent = '导出失败';
-      });
+    // PNG: 合成图 (底图+标签) 直接输出
+    document.getElementById('jb-png').onclick = async function() {
+      var d = await captureWithLabelsURL('image/png');
+      if (!d) { hint.textContent = '截图失败'; return; }
+      download(dataURLtoBlob(d), 'insula_view.png');
+      hint.textContent = 'PNG 已导出';
     };
-    document.getElementById('jb-pdf').onclick = function() {
-      var c = snap(); if (!c) return;
-      var img = c.toDataURL('image/jpeg', 0.95);
-      var jpeg = atob(img.split(',')[1]);
-      var jlen = jpeg.length;
-      var w = c.width, h = c.height;
-      var objects = [];
-      objects.push('<< /Type /Catalog /Pages 2 0 R >>');
-      objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-      objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + w + ' ' + h +
-                   '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
-      objects.push('<< /Type /XObject /Subtype /Image /Width ' + w +
-                   ' /Height ' + h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8' +
-                   ' /Filter /DCTDecode /Length ' + jlen + ' >>\nstream\n' +
-                   jpeg + '\nendstream');
-      var stream = 'q ' + w + ' 0 0 ' + h + ' 0 0 cm /Im0 Do Q';
-      objects.push('<< /Length ' + stream.length + ' >>\nstream\n' +
-                   stream + '\nendstream');
-      var pdf = '%PDF-1.4\n';
-      var offsets = [];
-      for (var i = 0; i < objects.length; i++) {
-        offsets.push(pdf.length);
-        pdf += (i + 1) + ' 0 obj\n' + objects[i] + '\nendobj\n';
+    // PDF: JPEG dataURL -> 内嵌最小 PDF
+    document.getElementById('jb-pdf').onclick = async function() {
+      var jpeg = await captureWithLabelsURL('image/jpeg', 0.95);
+      if (!jpeg) { hint.textContent = '截图失败'; return; }
+      var bin = atob(jpeg.split(',')[1]);
+      var len = bin.length;
+      var objs = [];
+      objs.push('<< /Type /Catalog /Pages 2 0 R >>');
+      objs.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+      objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' +
+        window.innerWidth + ' ' + window.innerHeight +
+        '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
+      objs.push('<< /Type /XObject /Subtype /Image /Width ' + window.innerWidth +
+        ' /Height ' + window.innerHeight + ' /ColorSpace /DeviceRGB ' +
+        '/BitsPerComponent 8 /Filter /DCTDecode /Length ' + len +
+        ' >>\nstream\n' + bin + '\nendstream');
+      var stream = 'q ' + window.innerWidth + ' 0 0 ' + window.innerHeight +
+        ' 0 0 cm /Im0 Do Q';
+      objs.push('<< /Length ' + stream.length + ' >>\nstream\n' + stream + '\nendstream');
+      var pdf = '%PDF-1.4\n', offs = [];
+      for (var i = 0; i < objs.length; i++) {
+        offs.push(pdf.length);
+        pdf += (i+1) + ' 0 obj\n' + objs[i] + '\nendobj\n';
       }
-      var xrefPos = pdf.length;
-      pdf += 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n';
-      offsets.forEach(function(o) {
-        pdf += ('0000000000' + o).slice(-10) + ' 00000 n \n';
+      var xref = pdf.length;
+      pdf += 'xref\n0 ' + (objs.length+1) + '\n0000000000 65535 f \n';
+      offs.forEach(function(o) {
+        pdf += ('0000000000'+o).slice(-10) + ' 00000 n \n';
       });
-      pdf += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\n' +
-             'startxref\n' + xrefPos + '\n%%EOF';
-      download(new Blob([pdf], {type: 'application/pdf'}), 'insula_view.pdf');
+      pdf += 'trailer\n<< /Size ' + (objs.length+1) + ' /Root 1 0 R >>\n' +
+        'startxref\n' + xref + '\n%%EOF';
+      download(new Blob([pdf], {type:'application/pdf'}), 'insula_view.pdf');
+      hint.textContent = 'PDF 已导出';
     };
-    document.getElementById('jb-tif').onclick = function() {
-      var c = snap(); if (!c) return;
-      // WebGL canvas: 用 toDataURL -> 2D canvas (保证可读像素)
-      var imgEl = new Image();
-      imgEl.onload = function() {
-        var c2 = document.createElement('canvas');
-        c2.width = imgEl.width; c2.height = imgEl.height;
-        var ctx = c2.getContext('2d');
-        ctx.drawImage(imgEl, 0, 0);
-        var imgData = ctx.getImageData(0, 0, c2.width, c2.height).data;
-        var w = c2.width, h = c2.height;
-        var rowBytes = w * 3;
-        var stripLen = rowBytes * h;
-        // 最小标准 TIFF: 8 header + 2 count + 14*12 entries + 4 nextIFD
-        var data = new Uint8Array(8 + 2 + 14 * 12 + 4 + stripLen);
-        var dv = new DataView(data.buffer);
-        data[0] = 0x49; data[1] = 0x49; data[2] = 42; data[3] = 0;
-        dv.setUint32(4, 8, true);          // IFD offset = 8
-        var ifd = 8;
-        dv.setUint16(ifd, 14, true);       // entry count = 14
-        var e = ifd + 2;
-        var dataStart = ifd + 2 + 14 * 12 + 4;
-        function w16(off, v) { dv.setUint16(off, v, true); }
-        function w32(off, v) { dv.setUint32(off, v, true); }
-        // 写条目: 所有 count=1 直接把值放 offset 字段 (SHORT 低16位)
-        function E(tag, type, count, value) {
-          w16(e, tag); w16(e + 2, type); w32(e + 4, count);
-          if (type === 3 && count === 1) {
-            w16(e + 8, value); w16(e + 10, 0);
-          } else {
-            w32(e + 8, value);
-          }
-          e += 12;
-        }
-        E(256, 4, 1, w);              // ImageWidth
-        E(257, 4, 1, h);              // ImageLength
-        E(258, 3, 1, 8);              // BitsPerSample = 8 (单值, RGB 共用)
-        E(259, 3, 1, 1);              // Compression = none
-        E(262, 3, 1, 2);              // Photometric = RGB
-        E(273, 4, 1, dataStart);      // StripOffsets
-        E(277, 3, 1, 3);              // SamplesPerPixel = 3
-        E(278, 4, 1, h);              // RowsPerStrip
-        E(279, 4, 1, stripLen);       // StripByteCounts
-        E(282, 3, 1, 72);             // XResolution (SHORT 近似)
-        E(283, 3, 1, 72);             // YResolution
-        E(284, 3, 1, 1);              // PlanarConfig = 1
-        E(296, 3, 1, 2);              // ResolutionUnit = inch
-        E(305, 2, 1, 0);              // Software (空)
-        w32(ifd + 2 + 14 * 12, 0);    // next IFD = 0
-        for (var i = 0; i < h; i++) {
-          for (var x = 0; x < w; x++) {
-            var src = (i * w + x) * 4;
-            var dst = dataStart + i * rowBytes + x * 3;
-            data[dst] = imgData[src];
-            data[dst + 1] = imgData[src + 1];
-            data[dst + 2] = imgData[src + 2];
-          }
-        }
-        download(new Blob([data], {type: 'image/tiff'}), 'insula_view.tif');
-      };
-      imgEl.src = c.toDataURL('image/png');
+    // TIF: 合成图 -> RGB -> 最小 TIFF
+    document.getElementById('jb-tif').onclick = async function() {
+      var c = await captureWithLabels();
+      if (!c) { hint.textContent = '截图失败'; return; }
+      var w = c.width, h = c.height;
+      var ctx = c.getContext('2d');
+      var px = ctx.getImageData(0, 0, w, h).data;
+      var rowBytes = w * 3, stripLen = rowBytes * h;
+      var data = new Uint8Array(8 + 2 + 14*12 + 4 + stripLen);
+      var dv = new DataView(data.buffer);
+      data[0]=0x49; data[1]=0x49; data[2]=42; data[3]=0;
+      dv.setUint32(4, 8, true);
+      var ifd = 8;
+      dv.setUint16(ifd, 14, true);
+      var e = ifd + 2;
+      var dataStart = ifd + 2 + 14*12 + 4;
+      function E(tag, type, count, value) {
+        dv.setUint16(e, tag, true); dv.setUint16(e+2, type, true);
+        dv.setUint32(e+4, count, true);
+        if (type === 3 && count === 1) { dv.setUint16(e+8, value, true); dv.setUint16(e+10, 0, true); }
+        else { dv.setUint32(e+8, value, true); }
+        e += 12;
+      }
+      E(256,4,1,w); E(257,4,1,h); E(258,3,1,8); E(259,3,1,1);
+      E(262,3,1,2); E(273,4,1,dataStart); E(277,3,1,3); E(278,4,1,h);
+      E(279,4,1,stripLen); E(282,3,1,72); E(283,3,1,72); E(284,3,1,1);
+      E(296,3,1,2); E(305,2,1,0);
+      dv.setUint32(ifd + 2 + 14*12, 0, true);
+      for (var i = 0; i < h; i++) for (var x = 0; x < w; x++) {
+        var s = (i*w+x)*4, d = dataStart + i*rowBytes + x*3;
+        data[d]=px[s]; data[d+1]=px[s+1]; data[d+2]=px[s+2];
+      }
+      download(new Blob([data], {type:'image/tiff'}), 'insula_view.tif');
+      hint.textContent = 'TIF 已导出';
     };
+
+    function pngDataURLtoJpeg(du, q) {
+      return dataURLtoImage(du).then(function(im) {
+        var c = document.createElement('canvas');
+        c.width = im.naturalWidth; c.height = im.naturalHeight;
+        c.getContext('2d').drawImage(im, 0, 0);
+        return c.toDataURL('image/jpeg', q);
+      });
+    }
   }
 
   if (document.readyState === 'loading') {
@@ -322,47 +399,48 @@ INJECT_JS = r"""
   } else {
     addToolbar();
   }
-  waitForViewer(subInjected);
+  waitOnView(subInjected);
+  function waitOnView(cb, tries) {
+    tries = tries || 0;
+    var rw = getRW();
+    if (rw) {
+      applyInitCam();          // 应用 pyvista 相机 (iso/front/top)
+      if (DOM_LABELS.length === 0) { cb(); return; }
+    }
+    if (tries > 400) return;
+    setTimeout(function() { waitOnView(cb, tries + 1); }, 250);
+  }
 })();
 </script>
 """
 
 
-def inject_toolbar(html_path: str, out_path: str = None,
-                   subregions=None):
-    """注入导出工具栏 + DOM 标签 into trame viewer HTML.
-
-    subregions: 可选 [(x,y,z, label, color_hex, text_color), ...]
-    """
-    import numpy as np
+def inject_toolbar(html_path, out_path=None, subregions=None):
     html = open(html_path, 'r', encoding='utf-8').read()
-
-    # 构建亚区 JS 数据
     js_data = 'window.JB_SUBREGIONS = [];'
     if subregions:
         items = []
         for sr in subregions:
             x, y, z, lbl, color, text = sr
-            items.append(f'[{x},{y},{z},"{lbl}","{color}","{text}"]')
+            items.append('[%s,%s,%s,"%s","%s","%s"]' % (x, y, z, lbl, color, text))
         js_data = 'window.JB_SUBREGIONS = [' + ','.join(items) + '];'
-
-    inject = f'<script>{js_data}</script>\n' + INJECT_JS
+    inject = '<script>' + js_data + '</script>\n' + INJECT_JS
     html = html.replace('</body>', inject + '\n</body>')
     out = out_path or html_path
+    # 注入相机初始参数 (iso 默认; 与 visualize_subregions de iso 一致)
+    cam_js = ('window.JB_CAM = {pos:[280,-280,240], focal:[0,0,5], up:[0,0,1], clip:[0.01,2000]};')
+    html = html.replace('<script>window.JB_SUBREGIONS',
+                        '<script>' + cam_js + '</script>\n<script>window.JB_SUBREGIONS')
     open(out, 'w', encoding='utf-8').write(html)
     print('injected ->', out)
     return out
 
 
 if __name__ == '__main__':
-    import sys
     src = sys.argv[1] if len(sys.argv) > 1 else \
-        os.path.join(os.path.dirname(__file__), '..', '..', 'images',
-                     'insula_viewer.html')
+        os.path.join(os.path.dirname(__file__), '..', '..', 'images', 'insula_viewer.html')
     dst = sys.argv[2] if len(sys.argv) > 2 else \
         os.path.join(os.path.dirname(src), 'insula_viewer_exports.html')
-
-    # 从 jellybrain spec 生成亚区标签数据 (坐标/名称/网络色)
     subregions = None
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -377,10 +455,8 @@ if __name__ == '__main__':
             shape = '#%02X%02X%02X' % tuple(int(v * 255) for v in rgb)
             c = s.mni_center
             lbl = f'{s.short} · {s.name}' if s.short else s.name
-            subregions.append((float(c[0]), float(c[1]), float(c[2]),
-                               lbl, shape, text))
+            subregions.append((float(c[0]), float(c[1]), float(c[2]), lbl, shape, text))
         print(f'label data: {len(subregions)} subregions')
     except Exception as e:
-        print('spec load failed, no labels:', e)
-
+        print('spec load failed:', e)
     inject_toolbar(src, dst, subregions)
