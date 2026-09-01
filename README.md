@@ -13,7 +13,8 @@
 3. [边缘系统(海马/杏仁核/扣带回)可视化工具与图谱](#三边缘系统可视化工具与图谱)
 4. [深部核团可视化工具与图谱](#四深部核团可视化工具与图谱)
 5. [综合选型建议](#五综合选型建议)
-6. [参考链接与文献](#六参考链接与文献)
+6. [渲染引擎与优缺点详解](#六渲染引擎与优缺点详解)
+7. [参考链接与文献](#七参考链接与文献)
 
 ---
 
@@ -155,7 +156,156 @@
 
 ---
 
-## 六、参考链接与文献
+## 六、渲染引擎与优缺点详解
+
+> 本节聚焦"每个工具**基于什么渲染引擎**、**有什么优缺点**"这一核心问题,并配以官方示例图(图片存于 `images/`,来源见各图注)。
+
+### 6.1 渲染引擎谱系总览
+
+| 引擎层 | 代表工具 | 说明 |
+|---|---|---|
+| **OpenGL + 可编程 shader**(桌面端原生) | Surf Ice, Connectome Workbench, FSLeyes | 性能最好、画风上限最高;FSLeyes/WB 还支持绕过 GPU 的离屏渲染 (OSMesa) 以便服务器出图 |
+| **VTK(Visualization Toolkit)封装**(Python/MATLAB) | brainrender(v1/v2), ITK-SNAP 3D 窗口, MNE(经由 pyvista), 3D Slicer, BrainNet Viewer(间接) | 成熟、跨平台、丰富的 mesh/actor 管线;缺点是默认画风偏"工业风",需要 shader/样式定制才出大片感 |
+| **WebGL / WebGL2 / WebGPU**(浏览器) | Neuroglancer, NiiVue, BrainBrowser, siibra-explorer | 零安装、可分享、支持超大体积数据 (GPU 纹理/分块加载);性能受浏览器限制 |
+| **CIfTI / GIfTI 原生路径**(VDK 无关) | Connectome Workbench(原生), HippUnfold 表面 via wb_view | HCP 生态标准,支持 gray-ordinates、表面展开坐标 |
+| **matplotlib / plotly 2D 图表层** | nilearn 大部分图, MNE 波形图, FSLeyes 的 Plot 面板, ENIGMA 统计图 | 出版级、可编辑、矢量输出;不适合真正的 3D 体积渲染 |
+
+### 6.2 各工具详细对比
+
+#### Surf Ice (Neurolabusc)
+
+![Surf Ice 官方截图:皮层表面渲染,shader 环境光遮蔽效果](images/surfice_official.jpg)
+*图:Surf Ice 官方 README 运行截图(Rorden, Nature Methods 2025)*
+
+- **引擎**:自研 GLSL 渲染器(FreePascal/Lazarus 编写),OpenGL 3.3 Core、分支兼容 2.1;支持自定义 shader (`ao3_*.glsl` 等),环境光遮蔽 (ambient occlusion)、曲率阴影、体积转网格 (marching cubes)。
+- **优点**:画风居于全生态顶端——官方自述"shader 生成与主流工具都不同的惊艳图像";轻量单文件分发;Python 脚本可批量出图;网络 (BrainNet .node/.edge)、纤维束 (tck/trk)、体积 (mgh/nii) 全能加载;与 MRIcroGL (体积渲染) 姊妹配对。
+- **缺点**:GUI 交互选项多、新手学习曲线陡;骨骼网格格式 (mz3) 非标准,导出与其他工具互通需要转换;无统计分析管线(仅展示)。
+- **适用**:发表级表面/网络/纤维束可视化;作为 MRIcroGL 的"表面渲染搭档"。
+
+#### brainrender (BrainGlobe 生态)
+
+![brainrender 示例:小鼠大脑半透明渲染 + 细胞点云(eLife 65751 Fig.3)](images/brainrender_example.jpg)
+*图:Claudi et al. 2021, eLife 65751, Fig.3(CC-BY)*
+
+- **引擎**:早期使用 `vtkplotter`/`vedo`,v2 依赖 `pyvista`(VTK 的 Python 封装)+ `trimesh`;场景由 BrainGlobe Atlas API 提供任意坐标空间。
+- **优点**:几行代码出"杂志封图";`SHADER_STYLE` (`default/metallic/plastic/shiny/glossy/ambient`)+ `ROOT_ALPHA`/`ROOT_COLOR` 可精细控制半透明玻璃质感;与 atlas API 生态 (Allen、allen_human、atlas) 深度集成;支持动画/视频导出。
+- **缺点**:体型小但依赖链深 (vedo/pyvista/pyxde 等),安装常见版本冲突;以"展示解剖 + 数据叠加"为主,数学分析能力弱;人类 MNI 空间 atlas 支持不如小鼠图谱完善(brainrender 起源于小鼠)。
+- **适用**:论文 3D 示意图、封面图、神经解剖演示。
+
+#### nilearn
+
+![nilearn glass brain 示例:黑底玻璃脑风格](images/nilearn_glass_brain.png)
+*图:nilearn 官方示例 `plot_demo_glass_brain.html`*
+
+- **引擎**:`matplotlib` 为主(2D 切面、glass brain、ROI 叠加、connectome 圈图);表面图经 `surfplot`/matplotlib 3D;可选 plotly/ipyniivue 交互后端。
+- **优点**:与 scikit-learn 全家桶无缝;glass brain/统计图是**神经科学论文出图事实标准**;矢量输出、颜色条、多面板支持完善;教程文档极其丰富 (sphinx-gallery)。
+- **缺点**:3D 体积渲染不可用(nilearn 的 3D 是表面映射/半透明叠加,不做 ray-casting);画风偏"扁平学术风",美观度上限低于 Surf Ice/brainrender;大体积数据 (4D/万级卷) 交互性差。
+- **适用**:fMRI 统计结果、ROI、连接组的论文 2D 图;科研流水线默认出图工具。
+
+#### Connectome Workbench (wb_view)
+
+- **引擎**:C++ 原生 + Qt5 GUI + OpenGL;`wb_command` CLI;OSMesa 支持离屏渲染(用于无显示器服务器出图)。
+- **优点**:HCP/CIfTI 生态标准;gray-ordinate 表面-体积一体化;扁平/膨胀/无脑表面;`-show-scene` 可编程出图;渲染速度快、大数据友好。
+- **缺点**:UI 老旧、交互反直觉;"snowing" 调色风格与现代审美脱节;学习成本高。
+- **适用**:HCP 数据、亚皮层/皮层联合分析、HippUnfold 展开面查看。
+
+#### FSLeyes
+
+- **引擎**:wxPython + OpenGL;自研 `fsleyes.gl`(支持 GL 1.4/2.1/3.3);3D 视图用**体积光线投射 (ray-casting)**;Plot 面板走 matplotlib。
+- **优点**:FSL 生态默认查看器;切面/光箱/3D 视图一键切换;管线可写 `fsleyes render` 离屏出图;open-GL 版本兼容极好(老显卡/虚拟机可用)。
+- **缺点**:画风朴素(光线投射质感偏物理,不如 shader 渲染精致);功能堆叠导致菜单多。
+- **适用**:临床/科研体素质控、FSL 处理结果查看。
+
+#### ITK-SNAP
+
+![ITK-SNAP 4.x 分割界面截图](images/itksnap_screenshot.png)
+*图:ITK-SNAP 官网首页截图*
+
+- **引擎**:Qt6 GUI + ITK 图像处理 + VTK 3D 渲染窗口;新版 3D 用 VTK,2D 切片渲染已替换为直接 OpenGL2 硬件渲染(更快)。
+- **优点**:分割任务事实标准;自动 (active contour) + 手动分割;与 ASHS/HippUnfold 输出 (dseg.nii.gz) 直接配合;跨平台稳定。
+- **缺点**:聚焦分割、不做统计/网络;画风功能化;渲染质量一般。
+- **适用**:手动/半自动分割、亚区标签检查。
+
+#### Freeview (FreeSurfer)
+
+![FreeSurfer 海马/杏仁核亚区分割示例(freeview 查看)](images/freesurfer_hippo_amyg.png)
+*图:FreeSurfer Wiki `HippocampalSubfieldsAndNucleiOfAmygdala`(Iglesias et al. 2015; Saygin et al. 2017)*
+
+- **引擎**:Qt/C++ 自研 OpenGL 查看器;CLI 可脚本 (`freeview -v ...`)。
+- **优点**:FreeSurfer 生态唯一权威查看器;海马/杏仁核/丘脑核团/脑干亚区分割可直接 LUT 显示;还原度高。
+- **缺点**:仅与 FreeSurfer 输出深度绑定;对其他坐标空间 (MNI) 支持弱;视觉现代感不足。
+- **适用**:FreeSurfer 结果查看与亚区分割可视化。
+
+#### Lead-DBS
+
+![Lead-DBS DISTAL 图谱:DBS 相关深部结构三维渲染](images/leaddbs_distal.png)
+*图:Lead-DBS DISTAL atlas 知识库页面(经 lead-dbs.org 转载)*
+
+- **引擎**:MATLAB 网格渲染(自研 3D viewer)+ SPM12 配准管线;图谱为 NIfTI。
+- **优点**:深部核团生态最全:DISTAL、CIT168、AHEAD、THOMAS、HybraPD、ATAG 等;电极/VTA/纤维束一体化;预设视图 (DBS relevant structures)。
+- **缺点**:MATLAB 依赖(需 32GB RAM + R2024b);重量级;渲染画风偏工程;非开放性。
+- **适用**:DBS 电极定位、深部核团解剖可视化、连接组分析。
+
+#### ENIGMA Toolbox
+
+![ENIGMA Toolbox 皮层 + 皮层下 3D 渲染示例](images/enigma_toolbox.png)
+*图:ENIGMA Toolbox 官方文档首页图 (MICA-MNI)*
+
+- **引擎**:Python + matplotlib 3D;内嵌 Desikan-Killiany/Glasser/Schaefer 表面网格(FreeSurfer/GIfTI/VTK/OBJ);`plot_subcortical` 用预打包亚皮层网格。
+- **优点**:`plot_subcortical` 是**现成的深部核团/皮层下整体渲染函数**;与疾病 meta 分析 (ENIGMA) 生态直接对接;教学文档完整。
+- **缺点**:表面网格分辨率固定(非个体定制);3D 交互性一般。
+- **适用**:大脑皮层 + 16 个皮层下结构一键出版图;ENIGMA 协议用户。
+
+#### BrainNet Viewer
+
+![BrainNet Viewer 网络图示例(节点-边可视化)](images/brainnet_viewer.png)
+*图:BrainNet Viewer NITRC 截图(北京师范大学, Xan Mingrui)*
+
+- **引擎**:MATLAB OpenGL 渲染 + 内嵌 NIfTI 表面/体积。
+- **优点**:中国神经成像社区事实标准,发文量巨大;node/edge 简单文本格式,与 Surf Ice 互通;权重、颜色、粗细映射灵活。
+- **缺点**:MATLAB 依赖;2019 年后停止更新;画风停留在 2010 年代。
+- **适用**:脑网络(功能连接/重连)图、经典的"节点-连线"style。
+
+#### HippUnfold
+
+![HippUnfold:海马折叠-展开对比与亚区标签](images/hippunfold_subfields.png)
+*图:HippUnfold GitHub README(DeKraker et al. 2022, eLife 77945)*
+
+- **引擎**:底层是 nnU-Net (PyTorch) 分割 + Laplace 方程展开坐标系;表面处理经 Connectome Workbench 工具生成 GIfTI;输出可用 Freeview/ITK-SNAP/wb_view/HippUnfold Toolbox (Python/Matlab) 查看绘图。
+- **优点**:唯一"展开坐标"系统,亚区分割拓扑一致;与 7T/ex vivo 图集 (BigBrain、Magdeburg) 对齐;FAIR (BIDS App)。
+- **缺点**:只聚焦海马;安装复杂度高 (docker/snakemake);绘图功能需加装 toolbox。
+- **适用**:海马亚区形态学/层状分析、海马"展开地图"可视化。
+
+#### Neuroglancer
+
+- **引擎**:纯前端 WebGL/WebGL2,Google 出品;支持 precomputed/Zarr/N5/DVID/BOSS 数据源;四窗格(3 正交切面 + 1 个 3D)。
+- **优点**:超过 10 TB 体积数据浏览器内流畅浏览;零安装、URL 可分享(可做成长期公开链接);网格/骨架/分割着色丰富;生态大 (CloudVolume、TensorStore)。
+- **缺点**:纯查看器(无统计编辑);画风偏"科技蓝"功能化;图片不主打"美学出版"。
+- **适用**:超大分割数据、connectomics、公开数据集浏览。
+
+#### NiiVue
+
+- **引擎**:WebGL2(正在向 `niivue/mono` 重写,加 WebGPU);原生支持 30+ 体积/网格格式,含 DICOM/MINC/TIFF 插件;开源 (BSD),被 OpenNeuro、AFNI、FSL、Brainlife 等 50+ 项目采用。
+- **优点**:跨平台(手机/平板/电脑);ihs 2D/3D 一体;与 FSL/FreeSurfer/ANTs 输出直接兼容;更新活跃。
+- **缺点**:功能相对轻量(无分割编辑、无统计)。
+- **适用**:网页版医学影像查看、数据共享、公开平台嵌入。
+
+#### BrainBrowser
+
+- **引擎**:three.js (WebGL),JS 库;Surface Viewer + Volume Viewer 两套。
+- **优点**:嵌入简单(一个 HTTP 调用);需与 BrainInitiative 大数据配合 (CBRAIN)。
+- **缺点**:活跃度下降;功能有限。
+- **适用**:神经影像网站开发。
+
+#### 3D Slicer / PyCortex / MNE-Python
+
+- **3D Slicer**:VTK + Qt + ITK,临床/科研通用平台;几乎全能(分割、配准、体积渲染、引导手术),但画风"医用"、配置偏重。
+- **PyCortex**:前端 three.js + 后端 numpy;支持**扁平皮层图 (flattened)** 交互,是"皮层展开地图"的网络呈现代表。
+- **MNE-Python**:3D 后端 `pyvista`/`pyvistaqt`/`notebook`(可选 mayavi);皮层表面 + 头皮 + 源定位 + 时频一体化;画风现代(默认深色半透明),近年用 pyvista 后质感提升明显。
+
+---
+
+## 七、参考链接与文献
 
 **综述与方法论文**
 - Chopra S, Labache L, Dhamala E, Orchard ER, Holmes A. *A Practical Guide for Generating Reproducible and Programmatic Neuroimaging Visualizations*. Aperture Neuro, 2023. https://apertureneuro.org/article/85104-braincode-selector (含全工具对照表 + braincode 模板)
