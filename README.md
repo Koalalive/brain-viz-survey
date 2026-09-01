@@ -194,9 +194,29 @@
 
 > 📌 小结:日常论文图 → **思路 A/B/C**(nilearn 或 Freeview 即可);讲亚区细分 → **思路 D**(BNA/Julich 彩色 LUT);封面/透视展示 → **思路 E**(Surf Ice/brainrender);临床/电极 → **思路 F**。
 
-### 2.4 岛叶显示技巧
+### 2.3c 实战:玻璃脑 + 果冻岛叶(真实形态, pyvista 渲染)
 
-- Surf Ice:加载 FreeSurfer 膨胀面可放大显示岛叶;或用 `Advanced > Convert voxelwise volume to mesh` 把岛叶 mask 转 3D 网格再叠加。
+> 本仓库自带一套**可直接运行**的岛叶亚区形态渲染管线(`visualize_bna_insula.ipynb` + `scripts/insula_morph.py`, brainpy conda 环境)。
+
+**渲染管线(真实形态而非球):**
+
+1. **玻璃脑**:MNI152 1mm T1 → marching cubes 等值面 → Loop 细分平滑 → 半透明 PBR 材质
+2. **岛叶真实形态**:AAL 岛叶 mask(每个半球真实沟回轮廓)→ gaussian 平滑 → marching cubes 提取**带沟回起伏的岛叶皮层 3D 表面**
+3. **12 亚区划分**:BNA (Brainnetome) INS-1~6 双侧 12 亚区中心(来自 BNA data_centers.json)→ **Voronoi 划分**把岛叶表面按最近亚区中心分割为 12 块,每块保留真实形态
+4. **果冻质感**:半透明 (opacity 0.45) + 高光泽 (specular 1.0, power 128) + 低 roughness → Q 弹果冻感
+5. **配色**:左右同名同色,编号 1~6 = 红/蓝/绿/紫/橙/青;白字深底标签
+
+![等距视角:玻璃脑 + 12 亚区真实形态(标签版)](images/insula_morph_iso.png)
+![正面视角](images/insula_morph_front.png)
+![顶视图:左右对称、前后串珠状分布](images/insula_morph_top.png)
+*图:本仓库原创渲染 (pyvista),生成脚本 `scripts/insula_morph.py`,notebook `visualize_bna_insula.ipynb`*
+
+**为什么这样画(区别于球形占位):**
+- 岛叶是埋在外侧裂深部的皮层结构,形状是细长的弧形,与梨形/球形差异巨大;只有用真实形态才能体现它"藏起来"的解剖特征
+- Voronoi 划分保证了每块都在真实岛叶表面上;亚区边界即真实皮层表面的曲线,视觉上自然
+- 玻璃脑半透明让"岛叶藏在脑内"的空间关系一目了然
+
+### 2.4 岛叶显示技巧- Surf Ice:加载 FreeSurfer 膨胀面可放大显示岛叶;或用 `Advanced > Convert voxelwise volume to mesh` 把岛叶 mask 转 3D 网格再叠加。
 - 半透明皮层 + 岛叶实心高亮是主流做法(brainrender 的 `ROOT_ALPHA` + 独立 `add_brain_region`)。
 - 用 AAL/BNA/Julich ROI 做 mask 后,在 nilearn `plot_roi` / `plot_stat_map` 中叠加切片展示。
 
