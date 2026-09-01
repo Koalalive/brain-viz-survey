@@ -25,10 +25,11 @@ __all__ = [
 @dataclass
 class Subregion:
     """一个脑区亚区."""
-    name: str                       # 短名, 如 "dIa"
-    full_name: str                  # 全名, 如 "dorsal agranular"
+    name: str                       # 唯一名, 如 "Ins_L_1"
+    full_name: str                  # 全名, 如 "G · hypergranular"
     mni_center: np.ndarray          # MNI 中心 (mm), 用于 Voronoi
     yeo7: int = 4                   # Yeo-7 网络编号 (1-7), 用于配色
+    short: str = ''                 # 脑区名, 如 "G"/"dIa" (标签用)
 
 
 @dataclass
@@ -406,7 +407,7 @@ def visualize_subregions(
     pl.camera.zoom(camera_zoom)
 
     if return_plotter or add_labels:
-        # 3D 标签: 贴亚区 mesh 实际中心 (参考图样式), 静态/交互均用
+        # 3D 标签: 贴亚区 mesh 实际中心; 名称 = 脑区名 (short), 底板 = 所属网络色
         if add_labels:
             for s in spec.subregions:
                 sm = sub.get(s.name)
@@ -416,10 +417,16 @@ def visualize_subregions(
                 if label_offsets and s.name in label_offsets:
                     anchor = anchor + np.asarray(label_offsets[s.name],
                                                  dtype=float)
+                rgb = YeoNetwork.RGB[s.yeo7 - 1]
+                # 深色底板 -> 白字; 浅色底板 -> 黑字
+                lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+                text = '#FFFFFF' if lum < 0.55 else '#202020'
+                shape = '#%02X%02X%02X' % tuple(int(v * 255) for v in rgb)
+                lbl = f'{s.short} · {s.name}' if s.short else s.name
                 pl.add_point_labels(
-                    [anchor], [s.name], font_size=16,
-                    show_points=False, text_color='#202020',
-                    shape_color='#FFFFFF', shape_opacity=0.95,
+                    [anchor], [lbl], font_size=15,
+                    show_points=False, text_color=text,
+                    shape_color=shape, shape_opacity=0.9,
                     always_visible=True)
 
     if return_plotter:

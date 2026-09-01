@@ -8,7 +8,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 HTML = r'C:\Users\29698\brain-viz-survey\images\insula_viewer_exports.html'
 SHOT = r'C:\Users\29698\brain-viz-survey\images\_viewer_check.png'
 
-
 def main():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:

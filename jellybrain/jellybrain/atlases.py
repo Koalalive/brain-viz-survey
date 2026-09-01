@@ -91,10 +91,11 @@ def bna_insula_spec() -> AtlasSpec:
         x = rm[0] + vn[0] * rs[0] * 0.02
         y = rm[1] + vn[1] * rs[1] * 0.6
         z = rm[2] + vn[2] * rs[2] * 0.6
-        # 唯一 name (L/R 前缀) 供 Voronoi 分区; full_name 供展示
+        # 唯一 name (L/R 前缀) 供 Voronoi 分区; full_name/short 供展示
         subregions.append(Subregion(
             name=f'{key}',  # Ins_L_1 ... Ins_R_6 (唯一)
             full_name=d['full'],
+            short=d['short'],
             mni_center=np.array([x, y, z]), yeo7=d['yeo']))
     return AtlasSpec(
         atlas_name='brainnetome',
