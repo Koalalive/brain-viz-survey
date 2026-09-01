@@ -1,0 +1,13 @@
+numpy
+pyvista
+nibabel
+nilearn
+scipy
+scikit-image
+pillow
+
+[jupyter]
+pyvista[jupyter]
+trame
+trame-vtk
+trame-server

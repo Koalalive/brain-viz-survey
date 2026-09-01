@@ -1,0 +1,11 @@
+pyproject.toml
+jellybrain/__init__.py
+jellybrain/atlases.py
+jellybrain/cli.py
+jellybrain/core.py
+jellybrain.egg-info/PKG-INFO
+jellybrain.egg-info/SOURCES.txt
+jellybrain.egg-info/dependency_links.txt
+jellybrain.egg-info/entry_points.txt
+jellybrain.egg-info/requires.txt
+jellybrain.egg-info/top_level.txt
