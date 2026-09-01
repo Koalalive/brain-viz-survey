@@ -129,6 +129,46 @@ def voronoi_partition(mesh, centers: List[np.ndarray], names: List[str]):
     return submeshes
 
 
+def voronoi_boundary_lines(mesh, centers: List[np.ndarray],
+                           names: List[str]) -> "pv.PolyData":
+    """提取 Voronoi 分区边界边 -> 线段 polyline (用于清晰展示分区边界).
+
+    边界边 = 两个相邻三角面属于不同亚区时所共享的边.
+    """
+    import pyvista as pv
+    from scipy.spatial import cKDTree
+    tree = cKDTree(np.array(centers))
+    _, vert_label = tree.query(mesh.points)
+    cells = mesh.faces.reshape(-1, 4)[:, 1:4]
+    face_label = np.array([
+        np.bincount(vert_label[c], minlength=len(centers)).argmax()
+        for c in cells])
+
+    # 边 -> 两个面的 label
+    edge_faces: Dict[tuple, list] = {}
+    for ci, fc in enumerate(cells):
+        for a, b in [(fc[0], fc[1]), (fc[1], fc[2]), (fc[2], fc[0])]:
+            key = (min(a, b), max(a, b))
+            edge_faces.setdefault(key, []).append(face_label[ci])
+
+    # 边界边 (相邻面 label 不同)
+    boundary = []
+    for (a, b), labels in edge_faces.items():
+        if len(set(labels)) > 1:
+            boundary.append((a, b))
+
+    lines = []
+    for a, b in boundary:
+        lines.append([a, b])
+    if lines:
+        cells = np.hstack([np.array([2] * len(lines))[:, None],
+                           np.array(lines)]).astype(np.int64).ravel()
+    else:
+        cells = np.array([2, 0, 1], dtype=np.int64)
+    line_mesh = pv.PolyData(mesh.points, lines=cells)  # 线布局 [2,a,b]
+    return line_mesh
+
+
 def region_surface(spec: AtlasSpec, smooth_sigma: float = 1.5,
                    subdivide: int = 4, smooth_iter: int = 60):
     """脑区真实形态表面 (mask -> marching cubes -> 平滑)."""
@@ -162,6 +202,10 @@ def visualize_subregions(
     view: str = 'iso',
     add_labels: bool = True,
     show_legend: bool = True,
+    show_boundaries: bool = True,
+    boundary_color: str = '#333333',
+    boundary_radius: float = 0.5,
+    label_offsets: Optional[Dict[str, np.ndarray]] = None,
     alpha_brain: float = 0.06,
     alpha_region: float = 0.5,
     return_plotter: bool = False,
@@ -217,6 +261,14 @@ def visualize_subregions(
                     roughness=0.1, metallic=0.05, diffuse=0.9, ambient=0.35,
                     show_edges=False, lighting=True)
 
+    # ---------------- 分区边界线 (深灰 tube, 清晰展示亚区分界) ----------------
+    if show_boundaries:
+        bnd = voronoi_boundary_lines(surf, centers, names)
+        bnd = bnd.tube(radius=boundary_radius)  # 实体管, 不被半透明面遮挡
+        pl.add_mesh(bnd, color=boundary_color,
+                    smooth_shading=True, lighting=False, pickable=False,
+                    opacity=0.98)
+
     # ---------------- 地面阴影 ----------------
     try:
         pl.enable_shadows()
@@ -234,14 +286,17 @@ def visualize_subregions(
     pl.camera.zoom(camera_zoom)
 
     if return_plotter:
-        # 交互/HTML 模式保留 3D 标签 (用户可旋转)
+        # 交互/HTML 模式保留 3D 标签 (用户可旋转); label_offsets 自定义锚点
         if add_labels:
             for s in spec.subregions:
                 sm = sub.get(s.name)
                 if sm is None:
                     continue
+                anchor = np.array(sm.center, dtype=float)
+                if label_offsets and s.name in label_offsets:
+                    anchor = anchor + np.asarray(label_offsets[s.name], dtype=float)
                 pl.add_point_labels(
-                    [sm.center], [s.full_name], font_size=14,
+                    [anchor], [s.full_name], font_size=14,
                     show_points=False, text_color='#202020',
                     shape_color='#FFFFFF', shape_opacity=0.95,
                     always_visible=True)
@@ -253,15 +308,25 @@ def visualize_subregions(
         add_pil_legend(output, YeoNetwork.NAMES, YeoNetwork.HEX,
                        title='Yeo-7 Networks')
     if add_labels:
-        pil_subregion_labels(output, doc=spec, camera_side=view)
+        pil_subregion_labels(output, doc=spec, camera_side=view,
+                             label_offsets=label_offsets)
     return True
 
 
+def export_pdf(png_path: str, pdf_path: str):
+    """把渲染的 PNG 转成 PDF (多页可追加)."""
+    from PIL import Image
+    img = Image.open(png_path).convert('RGB')
+    img.save(pdf_path, 'PDF', resolution=150.0)
+    return pdf_path
+
+
 def pil_subregion_labels(img_path: str, doc: 'AtlasSpec',
-                         camera_side: str = 'iso'):
+                         camera_side: str = 'iso',
+                         label_offsets: Optional[Dict[str, np.ndarray]] = None):
     """用亚区 MNI 中心投影到 2D, 贪心放置不重叠标签 (白底+引线).
 
-    简化: 直接按中心排布, 若重叠则向右下微移 (菊花链算法).
+    label_offsets: {subregion_name: (dx, dy) 屏幕像素偏移} 自定义标签位置.
     """
     from PIL import Image, ImageDraw, ImageFont
     img = Image.open(img_path).convert('RGB')
@@ -293,6 +358,11 @@ def pil_subregion_labels(img_path: str, doc: 'AtlasSpec',
         d = c - pos
         sx = w / 2 + np.dot(d, u) * scale * 6
         sy = h / 2 - np.dot(d, uu) * scale * 6
+        # 自定义标签位置偏移 (屏幕像素)
+        if label_offsets and s.name in label_offsets:
+            off = np.asarray(label_offsets[s.name], dtype=float)
+            sx += float(off[0])
+            sy += float(off[1])
         anchors.append((float(sx), float(sy), s.name, s.full_name))
 
     placed = []

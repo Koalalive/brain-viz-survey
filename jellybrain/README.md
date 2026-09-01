@@ -19,17 +19,26 @@ from jellybrain.core import visualize_subregions
 # 1) 指定图谱 + 脑区 -> 获取图谱规格
 spec = atlases.get_spec('brainnetome', 'insula')   # Brainnetome Atlas 岛叶
 
-# 2) 渲染静态图 (三视角)
-visualize_subregions(spec, output='insula_iso.png', view='iso')
-visualize_subregions(spec, output='insula_front.png', view='front')
+# 2) 渲染静态图 (三视角; show_boundaries 显示分区边界线)
+visualize_subregions(spec, output='insula_iso.png', view='iso',
+                     show_boundaries=True)
 
-# 3) 交互式 3D (Jupyter 内)
-pl = visualize_subregions(spec, return_plotter=True)
+# 3) 标签位置自定义 (屏幕像素偏移 {name: (dx, dy)})
+offsets = {'Ins_L_1': (-30, 40), 'Ins_R_3': (40, -30)}
+visualize_subregions(spec, output='custom.png', label_offsets=offsets)
+
+# 4) 交互式 3D (Jupyter 内, trame 自带截图按钮可导出 PNG)
+pl = visualize_subregions(spec, return_plotter=True, show_boundaries=True)
 pl.show(jupyter_backend='trame')
 
-# 4) 导出自包含交互 HTML (浏览器直接打开, 无需 Python)
+# 5) 导出自包含交互 HTML (浏览器打开, 可旋转 + 截图导出 PNG)
 pl = visualize_subregions(spec, return_plotter=True)
 pl.export_html('insula_interactive.html')
+
+# 6) 导出 PDF (从渲染 PNG 转换)
+from jellybrain.core import export_pdf
+visualize_subregions(spec, output='insula.png')
+export_pdf('insula.png', 'insula.pdf')
 ```
 
 ## 命令行
@@ -84,8 +93,18 @@ class AtlasSpec:
 1. **玻璃脑**: MNI152 模板 (nilearn 自动获取) → marching cubes → Loop 细分 + 平滑
 2. **脑区形态**: 图谱 ROI mask → 高斯平滑 → marching cubes → 细分 3 次 + 平滑 (真实沟回形态)
 3. **亚区划分**: 亚区 MNI 中心 → **Voronoi 划分** (每块保留真实形态)
-4. **材质**: 果冻质感 (半透明 + 高光泽 + 低粗糙度) + **Yeo-7 官方配色**
-5. **图例**: Yeo-7 七色图例 (PIL 叠加); **标签**: 亚区全名
+4. **分区边界线**: 相邻亚区共享边提取 → tube 化 → 深灰高对比边界 (清晰展示亚区分界)
+5. **材质**: 果冻质感 (半透明 + 高光泽 + 低粗糙度) + **Yeo-7 官方配色**
+6. **标签**: PIL 智能排布 (不重叠 + 引线 + 可自定义 `label_offsets` 屏幕偏移)
+7. **图例**: Yeo-7 七色图例 (PIL 叠加)
+
+## 导出格式
+
+| 格式 | 方式 | 说明 |
+|---|---|---|
+| PNG | `visualize_subregions(..., output='x.png')` | 静态成品图 (边界线+标签+图例) |
+| 交互 HTML | `pl.export_html('x.html')` | trame viewer, 浏览器内旋转缩放, 自带截图按钮导出 PNG |
+| PDF | `export_pdf('x.png', 'x.pdf')` | 从渲染 PNG 转换 (150 DPI) |
 
 ## 依赖
 
