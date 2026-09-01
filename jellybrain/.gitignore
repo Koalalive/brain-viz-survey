@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+data/MNI152_T1_1mm_brain.nii
+images/insula_interactive.html
