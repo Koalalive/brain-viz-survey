@@ -90,19 +90,18 @@ class AtlasSpec:
 
 ## 渲染管线
 
-1. **玻璃脑**: MNI152 模板 (nilearn 自动获取) → marching cubes → Loop 细分 + 平滑
-2. **脑区形态**: 图谱 ROI mask → 高斯平滑 → marching cubes → 细分 3 次 + 平滑 (真实沟回形态)
-3. **亚区划分**: 亚区 MNI 中心 → **Voronoi 划分** (每块保留真实形态)
-4. **分区边界线**: 相邻亚区共享边提取 → 沿法线抬升 → **浅灰细虚线** (`dashed_boundary_lines`, `show_boundaries=True`)
-5. **材质**: 果冻质感 (半透明 + 高光泽 + 低粗糙度) + **Yeo-7 官方配色**
-6. **标签**: PIL 智能排布 (不重叠 + 引线 + 可自定义 `label_offsets` 屏幕偏移)
-7. **图例**: Yeo-7 七色图例 (PIL 叠加)
+1. **玻璃脑**: MNI152 模板 (nilearn 自动获取) → marching cubes → Loop 细分 + 平滑 (极淡半透明)
+2. **亚区独立形态**: 体素级 Voronoi 分割 (`split_mask_voxel_voronoi`)——脑区 mask 的每个体素归最近亚区中心,每个亚区**独立平滑 mesh**(天然分离,无交界线)
+3. **颜色**: Yeo-7 官方网络色 (每亚区按官方映射着色)
+4. **标签**: `Ins_L_1` 式短名,3D 标签**贴亚区实际中心**(白底黑字)
+5. **图例**: Yeo-7 七色图例 (PIL 叠加)
+6. **可选边界线**: `show_boundaries=True` 时浅灰虚线 (`dashed_boundary_lines`),默认关闭
 
 ## 导出格式
 
 | 格式 | 方式 | 说明 |
 |---|---|---|
-| PNG | `visualize_subregions(..., output='x.png')` | 静态成品图 (边界线+标签+图例) |
+| PNG | `visualize_subregions(..., output='x.png')` | 静态成品图 (贴标+图例) |
 | 交互 HTML | `pl.export_html('x.html')` | trame viewer, 浏览器内旋转缩放, 自带截图按钮导出 PNG |
 | PDF | `export_pdf('x.png', 'x.pdf')` | 从渲染 PNG 转换 (150 DPI) |
 

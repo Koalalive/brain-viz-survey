@@ -83,7 +83,7 @@ def test_exports(tmpdir='.'):
     # 自定义标签偏移
     png2 = os.path.join(tmpdir, '_t2.png')
     visualize_subregions(spec, output=png2, view='iso',
-                         label_offsets={'Ins_L_1': (50, 50)})
+                         label_offsets={'Ins_L_1': (50, 50, 0)})
     assert os.path.exists(png2)
     os.remove(png); os.remove(png2)
     try:

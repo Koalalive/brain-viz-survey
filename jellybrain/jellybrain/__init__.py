@@ -14,14 +14,15 @@ from .core import (
     voronoi_partition,
     voronoi_boundary_lines,
     dashed_boundary_lines,
+    split_mask_voxel_voronoi,
     export_pdf,
 )
 from . import atlases
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "AtlasSpec", "Subregion", "YeoNetwork",
     "visualize_subregions", "render_region", "make_glass_brain",
     "voronoi_partition", "voronoi_boundary_lines", "dashed_boundary_lines",
-    "export_pdf", "atlases",
+    "split_mask_voxel_voronoi", "export_pdf", "atlases",
 ]

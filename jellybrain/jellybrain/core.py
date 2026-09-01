@@ -67,6 +67,13 @@ class YeoNetwork:
     HEX = ['#%02X%02X%02X' % tuple(c) for c in (RGB * 255).astype(int)]
 
 
+# 12 亚区独立配色 (每亚区一色, 高区分度)
+SUBR_COLORS = [
+    '#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#00C7BE', '#007AFF',
+    '#AF52DE', '#FF2D55', '#5AC8FA', '#30B0C7', '#A2845E', '#88D600',
+]
+
+
 # --------------------------------------------------------------------------
 # 玻璃脑
 # --------------------------------------------------------------------------
@@ -224,8 +231,11 @@ def dashed_boundary_lines(mesh, centers: List[np.ndarray],
 
 
 def region_surface(spec: AtlasSpec, smooth_sigma: float = 1.5,
-                   subdivide: int = 4, smooth_iter: int = 60):
-    """脑区真实形态表面 (mask -> marching cubes -> 平滑)."""
+                   subdivide: int = 3, smooth_iter: int = 60):
+    """脑区真实形态表面 (mask -> marching cubes -> 平滑).
+
+    整体表面 (默认, 供 voronoi_partition 表面级划分用).
+    """
     import nibabel as nib
     import pyvista as pv
     from skimage.measure import marching_cubes
@@ -247,6 +257,64 @@ def region_surface(spec: AtlasSpec, smooth_sigma: float = 1.5,
     return mesh
 
 
+def split_mask_voxel_voronoi(spec: AtlasSpec,
+                             smooth_sigma: float = 1.2,
+                             subdivide: int = 3,
+                             smooth_iter: int = 60) -> Dict[str, "pv.PolyData"]:
+    """体素级 Voronoi 分割: 每个体素归最近亚区中心.
+
+    每个亚区独立 mask -> 各自 marching_cubes + 平滑.
+    各亚区之间天然分离 (无共享边界), 渲染时无交界线, 每亚区见顶平滑.
+    """
+    import nibabel as nib
+    import pyvista as pv
+    from skimage.measure import marching_cubes
+    from scipy.ndimage import gaussian_filter
+    from scipy.spatial import cKDTree
+
+    mask = np.asarray(spec.region_mask_fn(), dtype=bool)
+    aff = spec.region_mask_affine_fn()
+    inv = np.linalg.inv(aff)
+
+    # 亚区中心 -> 体素坐标
+    centers_vox = []
+    for s in spec.subregions:
+        v = inv @ np.array([s.mni_center[0], s.mni_center[1],
+                            s.mni_center[2], 1.0])
+        centers_vox.append([v[0], v[1], v[2]])
+    centers_vox = np.array(centers_vox)
+
+    # 体素最近分配
+    vox_coords = np.argwhere(mask)
+    tree = cKDTree(centers_vox)
+    _, assign = tree.query(vox_coords)
+    names = [s.name for s in spec.subregions]
+
+    out = {}
+    for k, name in enumerate(names):
+        sel = vox_coords[assign == k]
+        if len(sel) < 10:
+            continue
+        sub_mask = np.zeros_like(mask)
+        sub_mask[sel[:, 0], sel[:, 1], sel[:, 2]] = True
+        vol = gaussian_filter(sub_mask.astype(np.float32),
+                              sigma=smooth_sigma)
+        pad = 6
+        volp = np.pad(vol, pad, mode='constant')
+        try:
+            verts, faces, _, _ = marching_cubes(volp, level=0.5, step_size=1)
+        except Exception:
+            continue
+        verts = verts - pad
+        mm = (aff[:3, :3] @ verts.T).T + aff[:3, 3]
+        mesh = pv.PolyData(mm, np.hstack([np.full((faces.shape[0], 1), 3),
+                                          faces]).astype(np.int64).ravel())
+        mesh = mesh.subdivide(subdivide, subfilter='loop').smooth(
+            n_iter=smooth_iter, relaxation_factor=0.05)
+        out[name] = mesh
+    return out
+
+
 # --------------------------------------------------------------------------
 # 主渲染
 # --------------------------------------------------------------------------
@@ -256,14 +324,14 @@ def visualize_subregions(
     view: str = 'iso',
     add_labels: bool = True,
     show_legend: bool = True,
-    show_boundaries: bool = True,
-    boundary_color: str = '#909090',   # 浅灰 (虚线分隔)
-    boundary_radius: float = 0.35,     # 细管
+    show_boundaries: bool = False,    # 默认无虚线 (参考图风格); 需分隔时打开
+    boundary_color: str = '#909090',
+    boundary_radius: float = 0.35,
     dash_ratio: float = 0.5,
     dash_segments: int = 6,
     label_offsets: Optional[Dict[str, np.ndarray]] = None,
-    alpha_brain: float = 0.035,        # 极淡玻璃
-    alpha_region: float = 0.5,
+    alpha_brain: float = 0.05,         # 淡玻璃
+    alpha_region: float = 0.75,        # 亚区更实 (参考图)
     return_plotter: bool = False,
     mni152_path: Optional[str] = None,
     camera_zoom: float = 1.35,
@@ -273,13 +341,11 @@ def visualize_subregions(
     from PIL import Image
 
     brain = make_glass_brain(mni152_path)
-    surf = region_surface(spec)
-    centers = [s.mni_center for s in spec.subregions]
-    names = [s.name for s in spec.subregions]
-    sub = voronoi_partition(surf, centers, names)
+    # 体素级分割: 每亚区独立 mask -> 独立平滑 surface (无交界线)
+    sub = split_mask_voxel_voronoi(spec)
 
     pl = pv.Plotter(off_screen=(not return_plotter), window_size=[1600, 1100])
-    pl.set_background('#EDF2F8')
+    pl.set_background('#FFFFFF')
 
     # ---------------- 光照设置 (PBR) ----------------
     pl.enable_anti_aliasing('ssaa')
@@ -292,37 +358,33 @@ def visualize_subregions(
         pl.add_light(pv.Light(position=pos, light_type='camera light',
                               intensity=intens, color=color))
 
-    # ---------------- 玻璃脑 (极淡, 还原 insula_yeo_iso 简洁感) ----------------
+    # ---------------- 玻璃脑 (淡蓝半透明, 参考 insula_yeo_iso) ----------------
     pl.add_mesh(brain, color='#B8CBE0', opacity=alpha_brain,
                 smooth_shading=True, diffuse=0.5, ambient=0.55,
                 specular=0.6, specular_power=128, metallic=0.0,
                 roughness=0.2, show_edges=False)
 
-    # ---------------- 岛叶亚区 (PBR 果冻) ----------------
+    # ---------------- 岛叶亚区 (Yeo 网络色, 各自独立平滑) ----------------
+    # 每个亚区用其 Yeo-7 网络色 (参考图风格: 左团紫红 VAN, 右团蓝紫 SM)
     for s in spec.subregions:
         sm = sub.get(s.name)
         if sm is None:
             continue
-        if spec.color_dir == 'yeo7':
-            rgb = YeoNetwork.RGB[s.yeo7 - 1]
-        else:
-            rgb = None
-        # 柔化 (不再过度增亮, 保持原网络色但更通透)
-        r, g, b = (rgb if rgb is not None else (0.7, 0.7, 0.7))
-        r = min(1.0, r * 1.1 + 0.06)
-        g = min(1.0, g * 1.1 + 0.06)
-        b = min(1.0, b * 1.1 + 0.06)
-        pl.add_mesh(sm, color=(r, g, b), opacity=alpha_region,
-                    smooth_shading=True, specular=0.8, specular_power=64,
-                    roughness=0.15, metallic=0.0, diffuse=0.9, ambient=0.4,
+        rgb = YeoNetwork.RGB[s.yeo7 - 1]
+        pl.add_mesh(sm, color=tuple(rgb), opacity=alpha_region,
+                    smooth_shading=True, specular=0.6, specular_power=64,
+                    roughness=0.25, metallic=0.0, diffuse=0.85, ambient=0.45,
                     show_edges=False, lighting=True)
 
-    # ---------------- 分区边界线 (浅灰细虚线, 抬升表面防遮挡) ----------------
+    # ---------------- 分区边界线 (可选; 默认关闭) ----------------
     if show_boundaries:
+        surf = region_surface(spec)
+        centers = [s.mni_center for s in spec.subregions]
+        names = [s.name for s in spec.subregions]
         bnd = dashed_boundary_lines(surf, centers, names,
                                     dash_ratio=dash_ratio,
                                     n_segments=dash_segments, lift=1.0)
-        bnd = bnd.tube(radius=boundary_radius)  # 实体管, 可见
+        bnd = bnd.tube(radius=boundary_radius)
         pl.add_mesh(bnd, color=boundary_color,
                     smooth_shading=False, lighting=False, pickable=False,
                     opacity=1.0)
@@ -343,8 +405,8 @@ def visualize_subregions(
     pl.reset_camera()
     pl.camera.zoom(camera_zoom)
 
-    if return_plotter:
-        # 交互/HTML 模式保留 3D 标签 (用户可旋转); label_offsets 自定义锚点
+    if return_plotter or add_labels:
+        # 3D 标签: 贴亚区 mesh 实际中心 (参考图样式), 静态/交互均用
         if add_labels:
             for s in spec.subregions:
                 sm = sub.get(s.name)
@@ -352,12 +414,15 @@ def visualize_subregions(
                     continue
                 anchor = np.array(sm.center, dtype=float)
                 if label_offsets and s.name in label_offsets:
-                    anchor = anchor + np.asarray(label_offsets[s.name], dtype=float)
+                    anchor = anchor + np.asarray(label_offsets[s.name],
+                                                 dtype=float)
                 pl.add_point_labels(
-                    [anchor], [s.full_name], font_size=14,
+                    [anchor], [s.name], font_size=16,
                     show_points=False, text_color='#202020',
                     shape_color='#FFFFFF', shape_opacity=0.95,
                     always_visible=True)
+
+    if return_plotter:
         return pl
 
     pl.screenshot(output)
@@ -365,9 +430,6 @@ def visualize_subregions(
     if show_legend:
         add_pil_legend(output, YeoNetwork.NAMES, YeoNetwork.HEX,
                        title='Yeo-7 Networks')
-    if add_labels:
-        pil_subregion_labels(output, doc=spec, camera_side=view,
-                             label_offsets=label_offsets)
     return True
 
 
@@ -434,35 +496,31 @@ def pil_subregion_labels(img_path: str, doc: 'AtlasSpec',
             off = np.asarray(label_offsets[s.name], dtype=float)
             sx += float(off[0])
             sy += float(off[1])
-        anchors.append((float(sx), float(sy), s.name, s.full_name))
+        # 短名标签 (Ins_L_1 格式, 参考图样式)
+        short = s.name
+        anchors.append((float(sx), float(sy), s.name, short))
 
     placed = []
     for sx, sy, name, full in anchors:
         tw = draw.textlength(full, font=font)
-        th = 26
-        lx, ly = sx + 10, sy - th / 2
+        th = 24
+        # 标签直接贴锚点 (居中), 无引线
+        lx, ly = sx - tw / 2, sy - th / 2
         tries = 0
-        while any(abs(lx - px) < tw + 14 and abs(ly - py) < th + 10
+        while any(abs(lx - px) < tw + 10 and abs(ly - py) < th + 8
                   for px, py, *_ in placed):
-            lx += 18
-            ly += 16
+            ly -= 28  # 向上避让
             tries += 1
-            if tries > 50:
+            if tries > 60:
                 break
         placed.append((lx, ly, tw, th))
         rgb = YeoNetwork.RGB[s.yeo7 - 1]
         hexc = '#%02X%02X%02X' % tuple(int(v * 255) for v in rgb)
-        # 文字底框 (含 padding, 防裁切)
-        draw.rounded_rectangle([lx - 4, ly - 4, lx + tw + 14, ly + th + 4],
-                               radius=5, fill=(255, 255, 255, 210),
-                               outline=(80, 80, 80), width=1)
-        draw.rounded_rectangle([lx - 4, ly, lx + 12, ly + th - 2],
-                               radius=2, fill=hexc)
-        draw.text((lx + 16, ly + 2), full, fill=(30, 30, 30), font=font)
-        # 引线: 从标签框左边缘 -> 锚点 (避开框体)
-        draw.line([(lx - 4, ly + th / 2), (sx, sy)],
-                  fill=(90, 90, 90), width=1)
-        draw.ellipse([sx - 3, sy - 3, sx + 3, sy + 3], fill=hexc)
+        # 白底小标签 (贴亚区, 参考图样式)
+        draw.rounded_rectangle([lx - 4, ly - 4, lx + tw + 6, ly + th + 2],
+                               radius=4, fill=(255, 255, 255, 235),
+                               outline=(120, 120, 120), width=1)
+        draw.text((lx, ly - 1), full, fill=(30, 30, 30), font=font)
 
     img.save(img_path)
     return True
