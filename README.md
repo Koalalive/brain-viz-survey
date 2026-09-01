@@ -53,13 +53,13 @@
 | **Julich(概率图)** | ![julich 概率](images/julich_probabilistic.jpg) | 概率图叠加 |
 | **BrainNet Viewer** | ![brainnet](images/brainnet_viewer.png) | 网络节点-边经典画风 |
 
-### 岛叶亚区类(思路参考,图片来源见 2.3 节)
+### 岛叶亚区类(3D 渲染实战,图片来源见 2.3c 节)
 
-| 可视化思路 | 效果图 | 说明 |
+| 视角 | 效果图 | 说明 |
 |---|---|---|
-| **A. 三平面叠加** | ![ins slices](images/insula_aal_slices.png) | 岛叶 ROI 叠加 MNI 模板,经典论文图 |
-| **B. 玻璃脑全景** | ![ins glass](images/insula_aal_glass.png) | 半透明脑壳 + 岛叶实心高亮 |
-| **C. 矢状近观** | ![ins sag](images/insula_aal_sag.png) | 单侧矢状切,前后岛叶区分首选 |
+| **等距 + 标签** | ![iso](images/insula_yeo_iso.png) | 玻璃脑 + 岛叶 Yeo-7 网络材质 + 标签 + 图例 |
+| **正面** | ![front](images/insula_yeo_front.png) | 前部品红 VAN / 后部蓝 Somatomotor |
+| **顶视** | ![top](images/insula_yeo_top.png) | 左右对称,前后串珠状分布 |
 
 ### 边缘系统亚区类
 
@@ -194,22 +194,47 @@
 
 > 📌 小结:日常论文图 → **思路 A/B/C**(nilearn 或 Freeview 即可);讲亚区细分 → **思路 D**(BNA/Julich 彩色 LUT);封面/透视展示 → **思路 E**(Surf Ice/brainrender);临床/电极 → **思路 F**。
 
-### 2.3c 实战:玻璃脑 + 果冻岛叶(真实形态, pyvista 渲染)
+### 2.3c 实战:玻璃脑 + 果冻岛叶(Yeo-7 网络材质, pyvista 渲染)
 
-> 本仓库自带一套**可直接运行**的岛叶亚区形态渲染管线(`visualize_bna_insula.ipynb` + `scripts/insula_morph.py`, brainpy conda 环境)。
+> 本仓库自带一套**可直接运行**的岛叶亚区渲染管线(`visualize_bna_insula.ipynb` + `scripts/insula_morph.py`, brainpy conda 环境)。支持静态三视图 + **Jupyter 交互式 3D 窗口 (trame)** + **自包含交互 HTML 导出**。
 
-**渲染管线(真实形态而非球):**
+**渲染管线:**
 
-1. **玻璃脑**:MNI152 1mm T1 → marching cubes 等值面 → Loop 细分平滑 → 半透明 PBR 材质
-2. **岛叶真实形态**:AAL 岛叶 mask(每个半球真实沟回轮廓)→ gaussian 平滑 → marching cubes 提取**带沟回起伏的岛叶皮层 3D 表面**
-3. **12 亚区划分**:BNA (Brainnetome) INS-1~6 双侧 12 亚区中心(来自 BNA data_centers.json)→ **Voronoi 划分**把岛叶表面按最近亚区中心分割为 12 块,每块保留真实形态
-4. **果冻质感**:半透明 (opacity 0.45) + 高光泽 (specular 1.0, power 128) + 低 roughness → Q 弹果冻感
-5. **配色**:左右同名同色,编号 1~6 = 红/蓝/绿/紫/橙/青;白字深底标签
+1. **玻璃脑**:MNI152 1mm T1 → marching cubes → Loop 细分平滑 ×30 → 半透明 PBR
+2. **岛叶真实形态**:AAL 岛叶 mask → gaussian 平滑 (σ=1.2) → marching cubes → 细分 ×2 + laplacian 平滑 ×40 (**高平滑度,无锯齿**)
+3. **12 亚区划分**:BNA INS-1~6 双侧中心 (data_centers.json) → **Voronoi 划分**在真实岛叶表面上分割为 12 块
+4. **Yeo-7 网络材质**:每亚区的顶点在 [Yeo-7 图谱](https://www.nature.com/articles/nature13953)(厚版, MNI 空间)中**多数投票**得到网络归属 → 用 Yeo **官方配色**作为该亚区的材质颜色
+   - 解剖结果:岛叶前部多属 **Ventral Attention / Limbic**(洋红),后部属 **Somatomotor**(蓝),与文献一致
+5. **果冻质感**:半透明 0.5 + 高光泽 (specular 1.0, power 128) + 低 roughness 0.08
+6. **图例**:PIL 在右下角叠加 Yeo-7 七色图例 (色块 + 网络名)
+7. **标签**:每亚区白字深底标签 (Ins_L_1 ~ Ins_R_6)
 
-![等距视角:玻璃脑 + 12 亚区真实形态(标签版)](images/insula_morph_iso.png)
-![正面视角](images/insula_morph_front.png)
-![顶视图:左右对称、前后串珠状分布](images/insula_morph_top.png)
-*图:本仓库原创渲染 (pyvista),生成脚本 `scripts/insula_morph.py`,notebook `visualize_bna_insula.ipynb`*
+![等距视角:玻璃脑 + 12 亚区,Yeo-7 网络配色 + 图例 + 标签](images/insula_yeo_iso.png)
+![正面视角:前部品红 VAN / 后部蓝 Somatomotor](images/insula_yeo_front.png)
+![顶视图:左右对称](images/insula_yeo_top.png)
+*图:本仓库原创渲染 (pyvista),脚本 `scripts/insula_morph.py`,notebook `visualize_bna_insula.ipynb`*
+
+**交互式使用:**
+
+```bash
+# Jupyter notebook 内 (visualize_bna_insula.ipynb):
+from insula_morph import render_morph
+pl = render_morph(return_plotter=True, show_legend=False, add_labels=True)
+pl.show(jupyter_backend='trame')        # 交互式 3D 窗口
+pl.export_html('images/insula_interactive.html')  # 导出可分享的交互 HTML (30MB 自包含)
+```
+
+**Yeo-7 网络表:**
+
+| # | 网络 | 颜色 |
+|---|---|---|
+| 1 | Visual | 紫 `#781286` |
+| 2 | Somatomotor | 蓝 `#4682B4` |
+| 3 | Dorsal Attention | 绿 `#00760E` |
+| 4 | Ventral Attention | 洋红 `#C43AFA` |
+| 5 | Limbic | 淡黄绿 `#DCF8A4` |
+| 6 | Frontoparietal | 橙 `#E69422` |
+| 7 | Default Mode | 红 `#CD3E4E` |
 
 **为什么这样画(区别于球形占位):**
 - 岛叶是埋在外侧裂深部的皮层结构,形状是细长的弧形,与梨形/球形差异巨大;只有用真实形态才能体现它"藏起来"的解剖特征
