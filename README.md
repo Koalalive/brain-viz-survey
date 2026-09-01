@@ -18,6 +18,59 @@
 
 ---
 
+## 图集总览(各工具实际画风示例)
+
+> 以下图片均为各工具官方网站/官方文档/原始论文的公开示例图,已保存在 `images/`,可直观对比"画风"。点击可查看原图来源。
+
+### 表面渲染类
+
+| 工具 | 效果图 | 说明 |
+|---|---|---|
+| **Surf Ice** | ![Surf Ice](images/surfice_official.jpg) | shader + 环境光遮蔽,当前颜值标杆(Rorden, Nat Methods 2025) |
+| **Connectome Workbench** | ![wb_view 表面](images/wbview_surface.png) | HCP 生态,表面 + 数据映射,1.3 MB 高清图 |
+| **Connectome Workbench(体积)** | ![wb_view 体积](images/wbview_volume.png) | 三平面体积切面 |
+| **brainrender** | ![brainrender](images/brainrender_example.jpg) | 半透明玻璃质感 + 细胞点云(eLife 65751) |
+| **PyCortex** | ![pycortex](images/pycortex_flat.png) | 皮层扁平展开图 (flat map) |
+| **ENIGMA Toolbox** | ![ENIGMA](images/enigma_toolbox.png) | 皮层 + 16 个皮层下结构出版图 |
+
+### 体积/切面类
+
+| 工具 | 效果图 | 说明 |
+|---|---|---|
+| **FSLeyes** | ![fsleyes](images/fsleyes_ortho.png) | 正交三平面切面,FSL 生态 |
+| **ITK-SNAP** | ![itk-snap](images/itksnap_screenshot.png) | 分割标注 3D 轮廓 |
+| **nilearn** | ![nilearn](images/nilearn_glass_brain.png) | glass brain 玻璃脑,论文标配 |
+| **3D Slicer** | ![slicer 分割](images/slicer_segmented.png) | 分割编辑器 |
+| **3D Slicer(纤维束)** | ![slicer fibers](images/slicer_tractography.jpg) | 白质纤维束体积渲染 |
+
+### 深部核团 / 图谱类
+
+| 工具 | 效果图 | 说明 |
+|---|---|---|
+| **Lead-DBS DISTAL** | ![lead-dbs](images/leaddbs_distal.png) | DBS 目标 + 深部核团王炸图谱 |
+| **CIT168** | ![cit168](images/cit168_fig1.png) | 概率亚皮层图谱(Pauli 2018, Sci Data) |
+| **Julich Brain** | ![julich](images/julich_brain3d.jpg) | 细胞结构图谱 3D 展示 |
+| **Julich(概率图)** | ![julich 概率](images/julich_probabilistic.jpg) | 概率图叠加 |
+| **BrainNet Viewer** | ![brainnet](images/brainnet_viewer.png) | 网络节点-边经典画风 |
+
+### 边缘系统亚区类
+
+| 工具 | 效果图 | 说明 |
+|---|---|---|
+| **FreeSurfer 海马/杏仁核** | ![freesurfer](images/freesurfer_hippo_amyg.png) | 亚区分割 + 杏仁核核团 |
+| **HippUnfold** | ![hippunfold](images/hippunfold_subfields.png) | 海马折叠-展开 + 亚区标签 |
+| **ASHS** | ![ashs](images/ashs_segmentation.png) | 海马亚区分割 3D 渲染 |
+
+### Web 类
+
+| 工具 | 效果图 | 说明 |
+|---|---|---|
+| **BrainBrowser** | ![brainbrowser](images/brainbrowser_surface.png) | 浏览器内 WebGL 表面查看 |
+
+> 注:Neuroglancer / NiiVue / MNE-Python 无公开静态截图,请分别访问 [Neuroglancer live demo](https://neuroglancer-demo.appspot.com/)、[NiiVue Gallery](https://niivue.com/gallery)、[MNE gallery](https://mne.tools/stable/auto_examples/index.html) 在线查看效果。
+
+---
+
 ## 一、脑影像可视化软件生态与"画风"
 
 ### 1.1 三大谱系
@@ -204,6 +257,12 @@
 
 #### Connectome Workbench (wb_view)
 
+![Connectome Workbench wb_view 表面视图(皮层表面 + 数据映射)](images/wbview_surface.png)
+*图:Connectome Workbench 官网 wb_view 截图(Human Connectome Project)*
+
+![Connectome Workbench 体积视图(切面联合显示)](images/wbview_volume.png)
+*图:wb_view 体积/切面视图(Human Connectome Project)*
+
 - **引擎**:C++ 原生 + Qt5 GUI + OpenGL;`wb_command` CLI;OSMesa 支持离屏渲染(用于无显示器服务器出图)。
 - **优点**:HCP/CIfTI 生态标准;gray-ordinate 表面-体积一体化;扁平/膨胀/无脑表面;`-show-scene` 可编程出图;渲染速度快、大数据友好。
 - **缺点**:UI 老旧、交互反直觉;"snowing" 调色风格与现代审美脱节;学习成本高。
@@ -211,17 +270,59 @@
 
 #### FSLeyes
 
+![FSLeyes 正交视图(三平面切面显示)](images/fsleyes_ortho.png)
+*图:FSLeyes 官方文档 ortho 视图(open.win.ox.ac.uk)*
+
 - **引擎**:wxPython + OpenGL;自研 `fsleyes.gl`(支持 GL 1.4/2.1/3.3);3D 视图用**体积光线投射 (ray-casting)**;Plot 面板走 matplotlib。
 - **优点**:FSL 生态默认查看器;切面/光箱/3D 视图一键切换;管线可写 `fsleyes render` 离屏出图;open-GL 版本兼容极好(老显卡/虚拟机可用)。
 - **缺点**:画风朴素(光线投射质感偏物理,不如 shader 渲染精致);功能堆叠导致菜单多。
 - **适用**:临床/科研体素质控、FSL 处理结果查看。
 
+#### CIT168 图谱
+
+![CIT168 高分辨率概率亚皮层图谱(Pauli 2018)](images/cit168_fig1.png)
+*图:CIT168 图谱论文 Fig.1(Pauli et al. 2018, Scientific Data, CC-BY)*
+
+- **引擎**:纯数据产品(NIfTI 体积/概率图谱,无自绘引擎);分割基于高分辨率 T1/T2 模板 + 人群叠合;配套 `atlaskit` 工具库做分割一致性评估。
+- **优点**:32 个皮层下结构、概率图;0.7mm 高分辨率;覆盖 STN、SNc/SNr、红核、VTA、缰核等 DBS 相关结构。
+- **缺点**:仅是"数据/图谱",可视化要借助 Lead-DBS、ENIGMA、ITK-SNAP 等;非皮层下结构领域与 FreeSurfer aseg 分工重叠。
+
+#### Julich Brain Atlas (JuBrain)
+
+![Julich Brain Atlas 3D 展示(EBRAINS)](images/julich_brain3d.jpg)
+![Julich Brain 概率图](images/julich_probabilistic.jpg)
+*图:Julich Brain Atlas 官网 (julich-brain-atlas.de)*
+
+- **引擎**:纯图谱(non-render);官方搭配 **siibra-explorer**(WebGL 3D 浏览器查看器)+ **siibra-python**(程序化访问);概率图以 NIfTI 分发。
+- **优点**:细胞结构 (cytoarchitectonic) 金标准,200+ 脑区;岛叶 (Ig1/Ig2/Id1)、海马旁皮质等精细分区;EBRAINS 云基础设施免下载查看。
+- **缺点**:平台依赖 EBRAINS 账号/云服务;大图需 siibra 工具链,不是开箱即用的免费 GUI。
+
+#### BrainBrowser
+
+![BrainBrowser 表面查看器(浏览器内)](images/brainbrowser_surface.png)
+*图:BrainBrowser 官网 (CBRAIN/McGill)*
+
+- **引擎**:three.js (WebGL),JS 库;Surface Viewer + Volume Viewer 两套。
+- **优点**:嵌入简单(一个 HTTP 调用);需与 BrainInitiative 大数据配合 (CBRAIN)。
+- **缺点**:活跃度下降;功能有限。
+- **适用**:神经影像网站开发。
+
+#### 3D Slicer
+
+![3D Slicer 分割编辑器截图](images/slicer_segmented.png)
+![3D Slicer 白质纤维束渲染](images/slicer_tractography.jpg)
+*图:3D Slicer 官网 (www.slicer.org)*
+
+- **引擎**:VTK + Qt + ITK 的全栈平台;体积渲染、网格、DICOM 全支持;社区扩展模块众多。
+- **优点**:临床介入(手术规划、术中导航)事实标准;分割/配准/纤维束/DBS 模块齐全;跨平台、开源、更新活跃。
+- **缺点**:模块多、学习成本高;画风"医用工程"感,美观度不如 Surf Ice/brainrender;安装包大。
+
 #### ITK-SNAP
 
-![ITK-SNAP 4.x 分割界面截图](images/itksnap_screenshot.png)
+![ITK-SNAP 分割界面](images/itksnap_screenshot.png)
 *图:ITK-SNAP 官网首页截图*
 
-- **引擎**:Qt6 GUI + ITK 图像处理 + VTK 3D 渲染窗口;新版 3D 用 VTK,2D 切片渲染已替换为直接 OpenGL2 硬件渲染(更快)。
+- **引擎**:Qt6 GUI + ITK 图像处理 + VTK 3D 渲染窗口;新版 2D 切片渲染已替换为直接 OpenGL2 硬件渲染(更快)。
 - **优点**:分割任务事实标准;自动 (active contour) + 手动分割;与 ASHS/HippUnfold 输出 (dseg.nii.gz) 直接配合;跨平台稳定。
 - **缺点**:聚焦分割、不做统计/网络;画风功能化;渲染质量一般。
 - **适用**:手动/半自动分割、亚区标签检查。
@@ -290,18 +391,14 @@
 - **缺点**:功能相对轻量(无分割编辑、无统计)。
 - **适用**:网页版医学影像查看、数据共享、公开平台嵌入。
 
-#### BrainBrowser
-
-- **引擎**:three.js (WebGL),JS 库;Surface Viewer + Volume Viewer 两套。
-- **优点**:嵌入简单(一个 HTTP 调用);需与 BrainInitiative 大数据配合 (CBRAIN)。
-- **缺点**:活跃度下降;功能有限。
-- **适用**:神经影像网站开发。
-
 #### 3D Slicer / PyCortex / MNE-Python
 
-- **3D Slicer**:VTK + Qt + ITK,临床/科研通用平台;几乎全能(分割、配准、体积渲染、引导手术),但画风"医用"、配置偏重。
+![PyCortex 扁平皮层图 (flat map)](images/pycortex_flat.png)
+*图:PyCortex 官方 README 示例 (gallantlab)*
+
+- **3D Slicer**:VTK + Qt + ITK,临床/科研通用平台;几乎全能(分割、配准、体积渲染、引导手术),但画风"医用"、配置偏重(见图 6.2 上方 3D Slicer 小节)。
 - **PyCortex**:前端 three.js + 后端 numpy;支持**扁平皮层图 (flattened)** 交互,是"皮层展开地图"的网络呈现代表。
-- **MNE-Python**:3D 后端 `pyvista`/`pyvistaqt`/`notebook`(可选 mayavi);皮层表面 + 头皮 + 源定位 + 时频一体化;画风现代(默认深色半透明),近年用 pyvista 后质感提升明显。
+- **MNE-Python**:3D 后端 `pyvista`/`pyvistaqt`/`notebook`(可选 mayavi);皮层表面 + 头皮 + 源定位 + 时频一体化;画风现代(默认深色半透明),近年用 pyvista 后质感提升明显。示例见 [MNE gallery](https://mne.tools/stable/auto_examples/index.html)。
 
 ---
 
