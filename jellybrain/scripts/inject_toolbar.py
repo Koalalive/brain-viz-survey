@@ -41,7 +41,7 @@ INJECT_JS = r"""
     } catch (e) {
       console.log('cam apply err', e);
     }
-    // 关键: 激活鼠标交互 (vtk.js style 需要 currentRenderer)
+    // 关键: 激活鼠标交互 (vtk.js style 需要 currentRenderer) + 相机变化时自动重绘
     try {
       var rw = getRW();
       var it = rw.getInteractor();
@@ -50,6 +50,13 @@ INJECT_JS = r"""
       it.setContainer(cvs);
       it.bindEvents(cvs);
       it.setEnabled(true);
+      // 相机变化 -> 强制重绘 (离线 viewer 默认不重绘)
+      var cam = it.getCurrentRenderer ? it.getCurrentRenderer().getActiveCamera()
+                                      : getCam();
+      if (cam && cam.onModified && !window.__jb_camHooked) {
+        window.__jb_camHooked = true;
+        cam.onModified(function() { rw.render(); });
+      }
       if (rw.render) rw.render();
     } catch (e) {
       console.log('interactor err', e);
@@ -325,38 +332,71 @@ INJECT_JS = r"""
       download(dataURLtoBlob(d), 'insula_view.png');
       hint.textContent = 'PNG 已导出';
     };
-    // PDF: JPEG dataURL -> 内嵌最小 PDF
+    // PDF: JPEG dataURL -> 内嵌最小 PDF (字节级编码, 避免 UTF-8 破坏二进制)
     document.getElementById('jb-pdf').onclick = async function() {
       var jpeg = await captureWithLabelsURL('image/jpeg', 0.95);
       if (!jpeg) { hint.textContent = '截图失败'; return; }
       var bin = atob(jpeg.split(',')[1]);
       var len = bin.length;
-      var objs = [];
-      objs.push('<< /Type /Catalog /Pages 2 0 R >>');
-      objs.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-      objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' +
-        window.innerWidth + ' ' + window.innerHeight +
-        '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
-      objs.push('<< /Type /XObject /Subtype /Image /Width ' + window.innerWidth +
-        ' /Height ' + window.innerHeight + ' /ColorSpace /DeviceRGB ' +
-        '/BitsPerComponent 8 /Filter /DCTDecode /Length ' + len +
-        ' >>\nstream\n' + bin + '\nendstream');
-      var stream = 'q ' + window.innerWidth + ' 0 0 ' + window.innerHeight +
-        ' 0 0 cm /Im0 Do Q';
-      objs.push('<< /Length ' + stream.length + ' >>\nstream\n' + stream + '\nendstream');
-      var pdf = '%PDF-1.4\n', offs = [];
-      for (var i = 0; i < objs.length; i++) {
-        offs.push(pdf.length);
-        pdf += (i+1) + ' 0 obj\n' + objs[i] + '\nendobj\n';
+      var w = window.innerWidth, h = window.innerHeight;
+      // 构建 PDF 各段对象的字节数组
+      var parts = [];
+      var headers = [
+        '%PDF-1.4\n',
+        '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+        '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+        '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + w + ' ' + h +
+          '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+        '4 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + w + ' /Height ' +
+          h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode ' +
+          '/Length ' + len + ' >>\nstream\n'
+      ];
+      parts.push(headers[0]);
+      parts.push(headers[1]);
+      parts.push(headers[2]);
+      parts.push(headers[3]);
+      parts.push(headers[4]);
+      parts.push(bin);                       // JPEG 数据 (latin1 bytes)
+      parts.push('\nendstream\nendobj\n');
+      var stream = 'q ' + w + ' 0 0 ' + h + ' 0 0 cm /Im0 Do Q';
+      parts.push('5 0 obj\n<< /Length ' + stream.length + ' >>\nstream\n' +
+                 stream + '\nendstream\nendobj\n');
+      // 计算 offsets (字节级)
+      var pdfBytes = new Uint8Array(parts.reduce(function(a, p) {
+        // 每个字符串按 latin1 逐字节
+        return a + (typeof p === 'string' ? p.length : p.length);
+      }, 0) + 512);
+      var off = 0;
+      var offsets = [];
+      function writeStr(s) {
+        for (var i = 0; i < s.length; i++) pdfBytes[off++] = s.charCodeAt(i) & 0xff;
       }
-      var xref = pdf.length;
-      pdf += 'xref\n0 ' + (objs.length+1) + '\n0000000000 65535 f \n';
-      offs.forEach(function(o) {
-        pdf += ('0000000000'+o).slice(-10) + ' 00000 n \n';
+      // 重新组装 (track offsets for xref)
+      var header2 = '%PDF-1.4\n';
+      writeStr(header2);
+      offsets.push(off);
+      writeStr(headers[1]);      // obj1
+      offsets.push(off);
+      writeStr(headers[2]);      // obj2
+      offsets.push(off);
+      writeStr(headers[3]);      // obj3
+      offsets.push(off);
+      writeStr(headers[4]);      // obj4 header
+      // JPEG bytes (latin1)
+      for (var i = 0; i < bin.length; i++) pdfBytes[off++] = bin.charCodeAt(i) & 0xff;
+      writeStr('\nendstream\nendobj\n');
+      offsets.push(off);
+      writeStr(parts[7]);        // obj5
+      var xrefPos = off;
+      var xref = 'xref\n0 6\n0000000000 65535 f \n';
+      offsets.forEach(function(o) {
+        xref += ('0000000000'+o).slice(-10) + ' 00000 n \n';
       });
-      pdf += 'trailer\n<< /Size ' + (objs.length+1) + ' /Root 1 0 R >>\n' +
-        'startxref\n' + xref + '\n%%EOF';
-      download(new Blob([pdf], {type:'application/pdf'}), 'insula_view.pdf');
+      xref += 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xrefPos + '\n%%EOF';
+      writeStr(xref);
+      // 裁剪
+      var out = pdfBytes.slice(0, off);
+      download(new Blob([out], {type:'application/pdf'}), 'insula_view.pdf');
       hint.textContent = 'PDF 已导出';
     };
     // TIF: 合成图 -> RGB -> 最小 TIFF
