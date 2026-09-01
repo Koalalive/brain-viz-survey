@@ -53,6 +53,14 @@
 | **Julich(概率图)** | ![julich 概率](images/julich_probabilistic.jpg) | 概率图叠加 |
 | **BrainNet Viewer** | ![brainnet](images/brainnet_viewer.png) | 网络节点-边经典画风 |
 
+### 岛叶亚区类(思路参考,图片来源见 2.3 节)
+
+| 可视化思路 | 效果图 | 说明 |
+|---|---|---|
+| **A. 三平面叠加** | ![ins slices](images/insula_aal_slices.png) | 岛叶 ROI 叠加 MNI 模板,经典论文图 |
+| **B. 玻璃脑全景** | ![ins glass](images/insula_aal_glass.png) | 半透明脑壳 + 岛叶实心高亮 |
+| **C. 矢状近观** | ![ins sag](images/insula_aal_sag.png) | 单侧矢状切,前后岛叶区分首选 |
+
 ### 边缘系统亚区类
 
 | 工具 | 效果图 | 说明 |
@@ -135,7 +143,58 @@
 - **ft-insula**(ins-amu):人岛叶有效连接 (cortico-cortical evoked potentials),MNI-insula + Julich 两种划区 × Lausanne/ENIGMA 网格,基于 MNE 做皮层表面可视化 + ENIGMA 做皮层下网格可视化。可作为"岛叶专项可视化的标杆实现",含所有代码:https://github.com/ins-amu/ft-insula
 - **ENIGMA Toolbox**:`plot_subcortical` 内建皮层下网格(含岛叶属皮层下层级的处理方案),与 ft-insula 配合。
 
-### 2.3 岛叶显示技巧
+### 2.3 岛叶亚区可视化的思路(附参考图)
+
+岛叶 (insula) 的特殊挑战:它藏在脑沟深处,被额叶/顶叶/颞叶盖 (opercula) 覆盖,**在默认皮层表面视图上几乎不可见**。因此岛叶可视化通常采用以下几种思路:
+
+#### 思路 A:体积切面叠加(最经典)
+
+直接在 T1/MNI 模板的矢状/冠状/轴位切面上,把岛叶 (或岛叶亚区) 的 ROI mask 作彩色叠加。岛叶在斜冠状位上呈倒三角,在轴位上沿侧裂展布——切面最能直观展示其前后长短 (anterior-posterior) 与上下 (ventro-dorsal) 的相对位置关系。
+
+![原创:AAL 岛叶 (33/34) 在 MNI152 上的三平面叠加,由 nilearn 生成](images/insula_aal_slices.png)
+*图(本仓库原创,可复现):AAL 图谱岛叶 (L=33, R=34) 叠加在 MNI152 模板的三平面视图,nilearn `plot_stat_map` 生成*
+
+#### 思路 B:玻璃脑/半透明渲染(全景定位)
+
+"玻璃脑" (glass brain) 把全脑渲染成半透明轮廓,岛叶则以实心彩色从内部透出。适合在一张图里交代"岛叶亚区在全脑中的相对方位",尤其是与前额叶、扣带回、颞叶的连接关系示意。
+
+![原创:AAL 岛叶 - glass brain 全景图 (nilearn)](images/insula_aal_glass.png)
+*图(本仓库原创):nilearn `plot_glass_brain` 渲染,岛叶实心高亮*
+
+#### 思路 C:邻近切面近观(单侧矢状)
+
+岛叶亚区 (前岛/后岛、背侧/腹侧) 的区分最常在**矢状位**上看:前岛叶较靠前上,后岛叶靠后下。单侧矢状切 + 放大,是论文中展示"岛叶亚区"的首选。
+
+![原创:右岛叶矢状切近观 (nilearn)](images/insula_aal_sag.png)
+*图(本仓库原创):右半球矢状切面 (x=38),岛叶 mask 高亮*
+
+#### 思路 D:亚区级 parcellation 映射(进阶)
+
+岛叶细分为多个亚区时,主流做法是给**每个亚区配一个独立颜色**再叠加。三种主流亚区划法:
+
+| 划法 | 亚区数 | 划分依据 | 视觉呈现建议 |
+|---|---|---|---|
+| **Brainnetome (INS-1 ~ 6)** | 6/半球 | 连接架构 (structure-function) | 6 色 LUT 叠加;BNA 自带 LUT 文件;膨胀表面显示 |
+| **Julich-Brain (Ig1/Ig2/Id1 + 7 新区)** | 10-16 | 细胞结构 (cytoarchitectonic) | 概率图 (probability maps) 用梯度色;siibra-explorer 查看 |
+| **MNI-insula (Montreal)** | 1/4/7/19 | 多尺度全脑图谱适应 | 多分辨率套餐,适合 sEEG 电极映射 |
+| **HCP/Glasser 岛叶区 (Pol, Ig, AAIC...)** | ~6 | 多模态 (髓鞘/厚度/fMRI) | CIfTI 表面视图 |
+
+- 参考实现:ft-insula 仓库把 `MNI-insula` 与 `Julich` 两种划法直接落成 `parcellation_definitions/` 并存进 MNE 表面,一键出图;Parvizi 等人 (2026) 提出将**岛叶亚区画成扁平地图 (flat map)**,把每个细胞结构亚区平铺展开,电极落在哪一格一目了然(见其 Research Square 论文 Fig.1)。
+- **簇级拓扑**:对岛叶亚区做 k-means/层级聚类后,把不同簇上色,可得到"功能簇地图"(如 Quabs et al. 2025 HBM 把 Julich 16 亚区聚成 6 簇,投影到 fsaverage)。
+
+#### 思路 E:表面展开/半球开窗(高端)
+
+- **FreeSurfer 膨胀面 (inflated)**:把脑沟拍平后,原本藏在脑沟里的岛叶可见——这是 Surf Ice 官方推荐的岛叶显示方式。
+- **半球切除式 (hemisphere cutaway)**:用 Surf Ice/3D Slicer 对前额叶-顶叶盖做"切窗",露出岛叶 3D 全景,适合做封面图。
+- **flat map / unfold**:岛叶专用的二维展开地图 (类似 HippUnfold 之于海马),Parvizi 2026、Faillenot 等研究已产出岛叶 flat template 体系。
+
+#### 思路 F:与电极/刺激结果叠加(临床与 sEEG)
+
+把岛叶亚区 mask 与头皮 sEEG 电极点、VTA、ECoG 刺激点共显示——ft-insula 用 MNE 皮层表面 + ENIGMA 亚皮层网格实现,是"岛叶亚区 + 刺激响应"的标准画法。
+
+> 📌 小结:日常论文图 → **思路 A/B/C**(nilearn 或 Freeview 即可);讲亚区细分 → **思路 D**(BNA/Julich 彩色 LUT);封面/透视展示 → **思路 E**(Surf Ice/brainrender);临床/电极 → **思路 F**。
+
+### 2.4 岛叶显示技巧
 
 - Surf Ice:加载 FreeSurfer 膨胀面可放大显示岛叶;或用 `Advanced > Convert voxelwise volume to mesh` 把岛叶 mask 转 3D 网格再叠加。
 - 半透明皮层 + 岛叶实心高亮是主流做法(brainrender 的 `ROOT_ALPHA` + 独立 `add_brain_region`)。
