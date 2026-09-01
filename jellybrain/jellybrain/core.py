@@ -169,6 +169,60 @@ def voronoi_boundary_lines(mesh, centers: List[np.ndarray],
     return line_mesh
 
 
+def dashed_boundary_lines(mesh, centers: List[np.ndarray],
+                          names: List[str],
+                          dash_ratio: float = 0.55,
+                          n_segments: int = 5,
+                          lift: float = 0.6) -> "pv.PolyData":
+    """提取亚区分界并生成**虚线** (隔段交替保留), 浅色细线.
+
+    dash_ratio: 每段实线占比; n_segments: 每条边细分段数;
+    lift: 沿法线抬升 (mm), 让虚线浮于半透明亚区表面之上可见.
+    """
+    import pyvista as pv
+    from scipy.spatial import cKDTree
+    tree = cKDTree(np.array(centers))
+    _, vert_label = tree.query(mesh.points)
+    cells = mesh.faces.reshape(-1, 4)[:, 1:4]
+    face_label = np.array([
+        np.bincount(vert_label[c], minlength=len(centers)).argmax()
+        for c in cells])
+
+    # 顶点法线 (抬升用)
+    normals = np.asarray(mesh.compute_normals(cell_normals=False,
+                                              split_vertices=False)
+                         .point_data['Normals'], dtype=float)
+
+    edge_faces: Dict[tuple, list] = {}
+    for ci, fc in enumerate(cells):
+        for a, b in [(fc[0], fc[1]), (fc[1], fc[2]), (fc[2], fc[0])]:
+            key = (min(a, b), max(a, b))
+            edge_faces.setdefault(key, []).append(face_label[ci])
+
+    pts = np.asarray(mesh.points, dtype=float)
+    dash_lines = []
+    for (a, b), labels in edge_faces.items():
+        if len(set(labels)) > 1:
+            pa = pts[a] + normals[a] * lift
+            pb = pts[b] + normals[b] * lift
+            for k in range(n_segments):
+                t0 = k / n_segments
+                t1 = t0 + dash_ratio / n_segments
+                if k % 2 == 0:
+                    dash_lines.append((pa + t0 * (pb - pa),
+                                       pa + t1 * (pb - pa)))
+    if not dash_lines:
+        return pv.PolyData(pts, lines=np.array([2, 0, 1]))
+
+    new_pts = []
+    cells = []
+    for idx, (p0, p1) in enumerate(dash_lines):
+        new_pts.append(p0)
+        new_pts.append(p1)
+        cells.extend([2, idx * 2, idx * 2 + 1])
+    return pv.PolyData(np.array(new_pts), lines=np.array(cells, dtype=np.int64))
+
+
 def region_surface(spec: AtlasSpec, smooth_sigma: float = 1.5,
                    subdivide: int = 4, smooth_iter: int = 60):
     """脑区真实形态表面 (mask -> marching cubes -> 平滑)."""
@@ -203,15 +257,17 @@ def visualize_subregions(
     add_labels: bool = True,
     show_legend: bool = True,
     show_boundaries: bool = True,
-    boundary_color: str = '#333333',
-    boundary_radius: float = 0.5,
+    boundary_color: str = '#909090',   # 浅灰 (虚线分隔)
+    boundary_radius: float = 0.35,     # 细管
+    dash_ratio: float = 0.5,
+    dash_segments: int = 6,
     label_offsets: Optional[Dict[str, np.ndarray]] = None,
-    alpha_brain: float = 0.06,
+    alpha_brain: float = 0.035,        # 极淡玻璃
     alpha_region: float = 0.5,
     return_plotter: bool = False,
     mni152_path: Optional[str] = None,
     camera_zoom: float = 1.35,
-):
+):  # -> bool | "pv.Plotter"  (return_plotter=True 时返回 Plotter)
     """渲染玻璃脑 + 亚区果冻. 返回 None / 保存图片 / 或 plotter (交互)."""
     import pyvista as pv
     from PIL import Image
@@ -236,11 +292,11 @@ def visualize_subregions(
         pl.add_light(pv.Light(position=pos, light_type='camera light',
                               intensity=intens, color=color))
 
-    # ---------------- 玻璃脑 (更清澈, 加菲涅尔感) ----------------
-    pl.add_mesh(brain, color='#5A8FC7', opacity=alpha_brain,
-                smooth_shading=True, diffuse=0.6, ambient=0.35,
-                specular=0.8, specular_power=128, metallic=0.0,
-                roughness=0.1, show_edges=False)
+    # ---------------- 玻璃脑 (极淡, 还原 insula_yeo_iso 简洁感) ----------------
+    pl.add_mesh(brain, color='#B8CBE0', opacity=alpha_brain,
+                smooth_shading=True, diffuse=0.5, ambient=0.55,
+                specular=0.6, specular_power=128, metallic=0.0,
+                roughness=0.2, show_edges=False)
 
     # ---------------- 岛叶亚区 (PBR 果冻) ----------------
     for s in spec.subregions:
@@ -251,23 +307,25 @@ def visualize_subregions(
             rgb = YeoNetwork.RGB[s.yeo7 - 1]
         else:
             rgb = None
-        # 亮度增强 + 饱和度提升 (PBR)
+        # 柔化 (不再过度增亮, 保持原网络色但更通透)
         r, g, b = (rgb if rgb is not None else (0.7, 0.7, 0.7))
-        r = min(1.0, r * 1.25 + 0.05)
-        g = min(1.0, g * 1.25 + 0.05)
-        b = min(1.0, b * 1.25 + 0.05)
+        r = min(1.0, r * 1.1 + 0.06)
+        g = min(1.0, g * 1.1 + 0.06)
+        b = min(1.0, b * 1.1 + 0.06)
         pl.add_mesh(sm, color=(r, g, b), opacity=alpha_region,
-                    smooth_shading=True, specular=1.0, specular_power=128,
-                    roughness=0.1, metallic=0.05, diffuse=0.9, ambient=0.35,
+                    smooth_shading=True, specular=0.8, specular_power=64,
+                    roughness=0.15, metallic=0.0, diffuse=0.9, ambient=0.4,
                     show_edges=False, lighting=True)
 
-    # ---------------- 分区边界线 (深灰 tube, 清晰展示亚区分界) ----------------
+    # ---------------- 分区边界线 (浅灰细虚线, 抬升表面防遮挡) ----------------
     if show_boundaries:
-        bnd = voronoi_boundary_lines(surf, centers, names)
-        bnd = bnd.tube(radius=boundary_radius)  # 实体管, 不被半透明面遮挡
+        bnd = dashed_boundary_lines(surf, centers, names,
+                                    dash_ratio=dash_ratio,
+                                    n_segments=dash_segments, lift=1.0)
+        bnd = bnd.tube(radius=boundary_radius)  # 实体管, 可见
         pl.add_mesh(bnd, color=boundary_color,
-                    smooth_shading=True, lighting=False, pickable=False,
-                    opacity=0.98)
+                    smooth_shading=False, lighting=False, pickable=False,
+                    opacity=1.0)
 
     # ---------------- 地面阴影 ----------------
     try:
@@ -319,6 +377,19 @@ def export_pdf(png_path: str, pdf_path: str):
     img = Image.open(png_path).convert('RGB')
     img.save(pdf_path, 'PDF', resolution=150.0)
     return pdf_path
+
+
+def render_region(atlas: str, region: str = 'insula', output: str = None,
+                  view: str = 'iso', **kwargs):
+    """一键式入口: 指定图谱 + 脑区 -> 渲染 (含虚线边界/标签/图例默认开启).
+
+    等价于 get_spec(atlas, region) 后调用 visualize_subregions.
+    """
+    from . import atlases
+    spec = atlases.get_spec(atlas, region)
+    if output is None:
+        output = f'{atlas}_{region}_{view}.png'
+    return visualize_subregions(spec, output=output, view=view, **kwargs)
 
 
 def pil_subregion_labels(img_path: str, doc: 'AtlasSpec',

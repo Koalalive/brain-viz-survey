@@ -93,7 +93,7 @@ class AtlasSpec:
 1. **玻璃脑**: MNI152 模板 (nilearn 自动获取) → marching cubes → Loop 细分 + 平滑
 2. **脑区形态**: 图谱 ROI mask → 高斯平滑 → marching cubes → 细分 3 次 + 平滑 (真实沟回形态)
 3. **亚区划分**: 亚区 MNI 中心 → **Voronoi 划分** (每块保留真实形态)
-4. **分区边界线**: 相邻亚区共享边提取 → tube 化 → 深灰高对比边界 (清晰展示亚区分界)
+4. **分区边界线**: 相邻亚区共享边提取 → 沿法线抬升 → **浅灰细虚线** (`dashed_boundary_lines`, `show_boundaries=True`)
 5. **材质**: 果冻质感 (半透明 + 高光泽 + 低粗糙度) + **Yeo-7 官方配色**
 6. **标签**: PIL 智能排布 (不重叠 + 引线 + 可自定义 `label_offsets` 屏幕偏移)
 7. **图例**: Yeo-7 七色图例 (PIL 叠加)

@@ -9,9 +9,11 @@ from .core import (
     Subregion,
     YeoNetwork,
     visualize_subregions,
+    render_region,
     make_glass_brain,
     voronoi_partition,
     voronoi_boundary_lines,
+    dashed_boundary_lines,
     export_pdf,
 )
 from . import atlases
@@ -19,7 +21,7 @@ from . import atlases
 __version__ = "0.1.0"
 __all__ = [
     "AtlasSpec", "Subregion", "YeoNetwork",
-    "visualize_subregions", "make_glass_brain", "voronoi_partition",
-    "voronoi_boundary_lines", "export_pdf",
-    "atlases",
+    "visualize_subregions", "render_region", "make_glass_brain",
+    "voronoi_partition", "voronoi_boundary_lines", "dashed_boundary_lines",
+    "export_pdf", "atlases",
 ]
