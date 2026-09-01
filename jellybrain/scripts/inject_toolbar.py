@@ -17,15 +17,44 @@ INJECT_JS = r"""
 <script>
 /* ================= jellybrain 导出工具栏 + DOM 标签 ================= */
 (function() {
-  // ---------- 亚区标签配置 (名称 + 网络色) ----------
-  // [x, y, z] 为亚区世界坐标 (MNI mm, 近似屏幕投影), 名称, 颜色
-    var SUBREGIONS = window.JB_SUBREGIONS || [];
+    // ---------- 亚区标签配置 (名称 + 网络色) ----------
+  // 3D 文字标签由 vtkTextActor3D 渲染 (跟随旋转锚定核团);
+  // 额外提供 DOM 标签层 (跟随旋转 + 可开关显隐) — 使用 vtk worldToDisplay.
+  var SUBREGIONS = window.JB_SUBREGIONS || [];
+  var DOM_LABELS = [];   // 已创建的 DOM 标签元素 (带世界坐标)
+  function getVtkView() {
+    // OfflineLocalView 全局实例
+    var OLV = window.OfflineLocalView;
+    if (OLV && OLV.view) return OLV.view;
+    // 尝试内部引用: view 常挂 _view 或被 getView 获得
+    try {
+      if (OLV && OLV.getView) return OLV.getView();
+    } catch (e) {}
+    return null;
+  }
+  function worldToScreen(pt, w, h) {
+    var view = getVtkView();
+    if (view && view.worldToDisplay) {
+      var out = view.worldToDisplay(pt);
+      if (out) return {x: out[0], y: h - out[1]};
+    }
+    return projectPoint(pt[0], pt[1], pt[2], w, h);
+  }
+  function updateDomLabels() {
+    if (!DOM_LABELS.length) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    DOM_LABELS.forEach(function(l) {
+      var p = worldToScreen([l.wx, l.wy, l.wz], w, h);
+      l.el.style.left = p.x + 'px';
+      l.el.style.top = p.y + 'px';
+      l.el.style.zIndex = String(9999 - Math.floor((l.depth || 0) / 10));
+    });
+  }
   function subInjected() {
     if (!SUBREGIONS.length) return;
     var canv = document.querySelector('#vtk-root canvas, canvas');
     if (!canv) return;
     var w = window.innerWidth, h = window.innerHeight;
-    var placed = [];
     SUBREGIONS.forEach(function(sr) {
       var el = document.createElement('div');
       el.className = 'jb-label';
@@ -38,27 +67,65 @@ INJECT_JS = r"""
         'background:' + sr[4] + ';color:' + sr[5] + ';' +
         'white-space:nowrap;letter-spacing:.3px;';
       document.body.appendChild(el);
-      var p = projectPoint(sr[0], sr[1], sr[2], w, h);
-      // 防重叠: 检测与已放置标签矩形碰撞, 向下/右微移
-      var ew = el.offsetWidth, eh = el.offsetHeight;
-      var lx = p.x, ly = p.y;
-      var tries = 0;
-      while (placed.some(function(r) {
-        return Math.abs(lx - r.x) < (ew + r.w) / 2 + 6 &&
-               Math.abs(ly - r.y) < (eh + r.h) / 2 + 4;
-      })) {
-        lx += 6; ly += 24;
-        if (++tries > 40) break;
-      }
-      placed.push({x: lx, y: ly, w: ew, h: eh});
-      el.style.left = lx + 'px';
-      el.style.top = ly + 'px';
-      el.dataset.x = sr[0]; el.dataset.y = sr[1]; el.dataset.z = sr[2];
+      DOM_LABELS.push({el: el, wx: sr[0], wy: sr[1], wz: sr[2]});
     });
-    var el = document.createElement('style');
-    el.textContent = '.jb-label:hover{filter:brightness(1.1)}' +
-      '.jb-label{user-select:none}';
-    document.head.appendChild(el);
+    // 每帧更新 (跟随旋转): 用 vtk 渲染事件或 RAF 轮询
+    var lastT = 0;
+    function tick() {
+      var now = Date.now();
+      if (now - lastT > 200) { updateDomLabels(); lastT = now; }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+    // 交互结束立即更新
+    ["mouseup", "touchend", "wheel"].forEach(function(ev) {
+      window.addEventListener(ev, function() { updateDomLabels(); }, true);
+    });
+    if (!window.__jb_legend_added) {
+      window.__jb_legend_added = true;
+      add_legend_panel();
+    }
+  }
+
+  // ---------- 图例面板 (Yeo-7 色卡, 可折叠) ----------
+  function add_legend_panel() {
+    var leg = document.createElement('div');
+    leg.id = 'jb-legend';
+    leg.style.cssText =
+      'position:fixed;bottom:12px;right:12px;z-index:9998;' +
+      'background:#ffffffee;padding:10px 14px;border-radius:8px;' +
+      'box-shadow:0 1px 4px rgba(0,0,0,.15);font:13px Arial,sans-serif;';
+    var items = [
+      ['Visual', '#781286'], ['Somatomotor', '#4682B4'],
+      ['Dorsal Attention', '#00760E'], ['Ventral Attention', '#C43AFA'],
+      ['Limbic', '#DCF8A4'], ['Frontoparietal', '#E69422'],
+      ['Default Mode', '#CD3E4E']];
+    var html = '<div style="font-weight:700;margin-bottom:6px">' +
+      'Yeo-7 Networks <span id="jb-leg-toggle" style="cursor:pointer;' +
+      'color:#888;font-size:11px">[-]</span></div>';
+    items.forEach(function(it) {
+      html += '<div style="display:flex;align-items:center;' +
+        'margin:3px 0;color:#333">' +
+        '<span style="display:inline-block;width:16px;height:16px;' +
+        'border-radius:3px;margin-right:8px;background:' + it[1] + '"></span>' +
+        it[0] + '</div>';
+    });
+    leg.innerHTML = html;
+    document.body.appendChild(leg);
+    var t = document.getElementById('jb-leg-toggle');
+    t.onclick = function() {
+      var body = leg.innerHTML;
+      if (leg.dataset.collapsed) {
+        add_legend_panel(); leg.dataset.collapsed = '';
+      } else {
+        leg.innerHTML = '<div style="font-weight:700;color:#333">' +
+          'Yeo-7 Networks <span id="jb-leg-toggle" style="cursor:pointer;' +
+          'color:#888;font-size:11px">[+]</span></div>';
+        leg.dataset.collapsed = '1';
+        document.getElementById('jb-leg-toggle').onclick =
+          leg.querySelector('span').onclick = function(){ add_legend_panel(); };
+      }
+    };
   }
 
   // 透视投影: 世界坐标 -> 屏幕 (精确, 与 vtk 透视相机一致)
@@ -109,10 +176,20 @@ INJECT_JS = r"""
       '<button id="jb-png">PNG</button> ' +
       '<button id="jb-pdf">PDF</button> ' +
       '<button id="jb-tif">TIF</button>' +
+      '&nbsp;|&nbsp;' +
+      '<label><input type="checkbox" id="jb-toggle-labels" checked> 标签</label>' +
       '&nbsp;<span id="jb-hint" style="color:#888"></span>';
     document.body.appendChild(bar);
 
     var hint = document.getElementById('jb-hint');
+    // 标签显隐开关 (控制 DOM 标签层; 3D 文本字形由 vtkTextActor3D 控制)
+    var lblToggle = document.getElementById('jb-toggle-labels');
+    lblToggle.addEventListener('change', function() {
+      var visible = lblToggle.checked;
+      document.querySelectorAll('.jb-label').forEach(function(el) {
+        el.style.display = visible ? '' : 'none';
+      });
+    });
     function snap() {
       var canv = document.querySelector('#vtk-root canvas, canvas');
       if (!canv) { hint.textContent = '未找到画布'; return null; }

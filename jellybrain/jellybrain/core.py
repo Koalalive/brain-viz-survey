@@ -319,6 +319,41 @@ def split_mask_voxel_voronoi(spec: AtlasSpec,
 # --------------------------------------------------------------------------
 # 主渲染
 # --------------------------------------------------------------------------
+def _add_text3d_labels(pl, sub, spec, label_offsets=None,
+                       text_color=(0.05, 0.05, 0.05), font_size=28,
+                       color_by_network=False):
+    """vtkTextActor3D 标签: 3D 空间中锚定核团中心, 跟随旋转.
+    text_color: (r,g,b) 文字颜色, 默认近黑.
+    color_by_network: True 时文字用所属 Yeo 网络色.
+    """
+    import vtk
+    from vtkmodules.vtkRenderingCore import vtkTextActor3D
+
+    for s in spec.subregions:
+        sm = sub.get(s.name)
+        if sm is None:
+            continue
+        c = np.array(sm.center, dtype=float)
+        if label_offsets and s.name in label_offsets:
+            c = c + np.asarray(label_offsets[s.name], dtype=float)
+        a = vtkTextActor3D()
+        a.SetInput(f'{s.short} · {s.name}' if s.short else s.name)
+        # 锚点略高于核团中心, 减少遮挡
+        a.SetPosition(float(c[0]), float(c[1]), float(c[2]) + 4.0)
+        prop = a.GetTextProperty()
+        if color_by_network:
+            rgb = YeoNetwork.RGB[s.yeo7 - 1]
+            prop.SetColor(float(rgb[0]), float(rgb[1]), float(rgb[2]))
+        else:
+            prop.SetColor(float(text_color[0]), float(text_color[1]),
+                          float(text_color[2]))
+        prop.SetFontSize(font_size)
+        prop.SetFontFamily(vtk.VTK_ARIAL)
+        prop.SetJustificationToCentered()
+        prop.SetVerticalJustificationToCentered()
+        pl.renderer.AddActor(a)
+
+
 def visualize_subregions(
     spec: AtlasSpec,
     output: Optional[str] = None,
@@ -331,6 +366,9 @@ def visualize_subregions(
     dash_ratio: float = 0.5,
     dash_segments: int = 6,
     label_offsets: Optional[Dict[str, np.ndarray]] = None,
+    label_mode: str = 'point',        # 'point' 2D标签(静态图) / 'text3d' 3D标签(跟随旋转, HTML/交互)
+    label_text_color: tuple = (0.05, 0.05, 0.05),  # 默认近黑
+    label_color_by_network: bool = False,           # True 时文字用网络色
     alpha_brain: float = 0.05,         # 淡玻璃
     alpha_region: float = 0.75,        # 亚区更实 (参考图)
     return_plotter: bool = False,
@@ -406,9 +444,13 @@ def visualize_subregions(
     pl.reset_camera()
     pl.camera.zoom(camera_zoom)
 
-    if return_plotter or add_labels:
-        # 3D 标签: 贴亚区 mesh 实际中心; 名称 = 脑区名 (short), 底板 = 所属网络色
-        if add_labels:
+    if add_labels:
+        # 标签: 2D point labels (静态图用) 或 vtkTextActor3D (交互/HTML 用, 3D跟随旋转)
+        if label_mode == 'text3d':
+            _add_text3d_labels(pl, sub, spec, label_offsets,
+                               text_color=label_text_color,
+                               color_by_network=label_color_by_network)
+        else:
             for s in spec.subregions:
                 sm = sub.get(s.name)
                 if sm is None:
@@ -418,7 +460,6 @@ def visualize_subregions(
                     anchor = anchor + np.asarray(label_offsets[s.name],
                                                  dtype=float)
                 rgb = YeoNetwork.RGB[s.yeo7 - 1]
-                # 深色底板 -> 白字; 浅色底板 -> 黑字
                 lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
                 text = '#FFFFFF' if lum < 0.55 else '#202020'
                 shape = '#%02X%02X%02X' % tuple(int(v * 255) for v in rgb)
@@ -428,6 +469,10 @@ def visualize_subregions(
                     show_points=False, text_color=text,
                     shape_color=shape, shape_opacity=0.9,
                     always_visible=True)
+
+    if return_plotter and label_mode == 'text3d':
+        # 已通过 _add_text3d_labels 添加 (交互/HTML 用)
+        pass
 
     if return_plotter:
         return pl
