@@ -259,13 +259,17 @@ def region_surface(spec: AtlasSpec, smooth_sigma: float = 1.5,
 
 
 def split_mask_voxel_voronoi(spec: AtlasSpec,
-                             smooth_sigma: float = 1.2,
+                             smooth_sigma: float = 0.8,
                              subdivide: int = 3,
-                             smooth_iter: int = 60) -> Dict[str, "pv.PolyData"]:
+                             smooth_iter: int = 40) -> Dict[str, "pv.PolyData"]:
     """体素级 Voronoi 分割: 每个体素归最近亚区中心.
 
     每个亚区独立 mask -> 各自 marching_cubes + 平滑.
     各亚区之间天然分离 (无共享边界), 渲染时无交界线, 每亚区见顶平滑.
+
+    平滑参数 (经验调优): 高 sigma + 高松弛 (0.05) 曾使毗邻亚区各自收缩,
+    间隙均值 1.44mm / 最大 6.1mm; 降至 sigma=0.8 + relax=0.01 后
+    间隙 0.33mm / 最大 2.05mm, 体积 +37% (更接近解剖毗邻).
     """
     import nibabel as nib
     import pyvista as pv
