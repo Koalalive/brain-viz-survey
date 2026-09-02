@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""完整验收测试: 导出 PNG/PDF/TIF 非空白 + 标签跟随旋转.
+"""无标签版验收测试.
 
 对 insula_viewer_exports.html 用 playwright:
-  - 点击导出, 下载文件, 用 PIL/字节校验非空白
-  - 拖拽旋转, 记录标签屏幕位置变化 (跟随检验).
+  - 无悬浮文字标签 (.jb-label == 0)
+  - Yeo-7 图例面板存在
+  - 鼠标拖拽 -> 相机变化 + 场景重绘 (截图像素差异)
+  - 导出 PNG/PDF/TIF 非空白
 """
 import os
-import sys
 import json
 
 from playwright.sync_api import sync_playwright
@@ -14,6 +15,7 @@ from playwright.sync_api import sync_playwright
 HTML = r'C:\Users\29698\brain-viz-survey\images\insula_viewer_exports.html'
 OUT = r'C:\Users\29698\AppData\Local\Temp\opencode\final_test'
 os.makedirs(OUT, exist_ok=True)
+
 
 def main():
     results = {}
@@ -25,29 +27,56 @@ def main():
         page.goto('file:///' + HTML.replace('\\', '/'))
         page.wait_for_timeout(9500)
 
-        # 1. 标签渲染数量
-        results['labels'] = page.evaluate(
+        # 1. 无悬浮标签 + 图例存在
+        results['jb-label_count'] = page.evaluate(
             'document.querySelectorAll(".jb-label").length')
+        results['legend_present'] = page.evaluate(
+            '!!document.getElementById("jb-legend")')
 
-        # 2. 标签位置 (旋转前)
-        pos_before = page.evaluate('''() => {
-          return Array.from(document.querySelectorAll(".jb-label"))
-            .map(e => [Math.round(e.offsetLeft), Math.round(e.offsetTop)]);
+        # 2. 相机位置 (拖拽前, 取含 actors 的主渲染器)
+        cam_before = page.evaluate('''() => {
+          var rw = window.global.renderWindow;
+          var rs = rw.getRenderers(), best = null, n = -1;
+          rs.forEach(function(r) {
+            var c = 0;
+            try { c = r.getActors().length; } catch (e) {}
+            if (c > n) { n = c; best = r; }
+          });
+          return best.getActiveCamera().getPosition();
         }''')
+        results['cam_before'] = [round(v, 1) for v in cam_before]
 
-        # 3. 旋转 (用滑块控件, 可靠) -> 标签跟随
-        page.fill('#jb-azim', '135')
-        page.dispatch_event('#jb-azim', 'input')
-        page.wait_for_timeout(1200)
-        pos_after = page.evaluate('''() => {
-          return Array.from(document.querySelectorAll(".jb-label"))
-            .map(e => [Math.round(e.offsetLeft), Math.round(e.offsetTop)]);
+        # 3. 截图 (画面基准)
+        shot0 = os.path.join(OUT, 'shot0.png')
+        page.screenshot(path=shot0)
+
+        # 4. 拖拽旋转
+        page.mouse.move(400, 400)
+        page.mouse.down()
+        page.mouse.move(560, 300, steps=12)
+        page.mouse.move(620, 280, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(1500)
+
+        # 5. 相机变化 + 画面重绘
+        cam_after = page.evaluate('''() => {
+          var rw = window.global.renderWindow;
+          var rs = rw.getRenderers(), best = null, n = -1;
+          rs.forEach(function(r) {
+            var c = 0;
+            try { c = r.getActors().length; } catch (e) {}
+            if (c > n) { n = c; best = r; }
+          });
+          return best.getActiveCamera().getPosition();
         }''')
-        moved = sum(1 for a, c in zip(pos_before, pos_after)
-                    if abs(a[0] - c[0]) + abs(a[1] - c[1]) > 5)
-        results['labels_moved_after_rotate'] = f'{moved}/{len(pos_before)}'
+        results['cam_after'] = [round(v, 1) for v in cam_after]
+        dist = sum((a - c) ** 2 for a, c in zip(cam_before, cam_after)) ** 0.5
+        results['camera_moved'] = round(dist, 1)
 
-        # 4. 导出三格式并下载
+        shot1 = os.path.join(OUT, 'shot1.png')
+        page.screenshot(path=shot1)
+
+        # 6. 导出三格式
         for btn, name in [('jb-png', 'v.png'), ('jb-pdf', 'v.pdf'),
                           ('jb-tif', 'v.tif')]:
             try:
@@ -64,28 +93,34 @@ def main():
         b.close()
     print(json.dumps(results, indent=2))
 
-    # 5. 校验文件内容
+    # 7. 像素差异 (画面确实重绘)
     from PIL import Image
     import numpy as np
+    a0 = np.array(Image.open(shot0).convert('L'))
+    a1 = np.array(Image.open(shot1).convert('L'))
+    diff = int((np.abs(a0.astype(int) - a1.astype(int)) > 20).sum())
+    print(f'redraw diff pixels = {diff} '
+          f'({"SCENE REPAINTED" if diff > 5000 else "CHECK!"})')
+
+    # 8. 文件内容校验
     png = os.path.join(OUT, 'v.png')
     if os.path.exists(png):
         im = np.array(Image.open(png).convert('L'))
         nonwhite = (im < 240).sum()
-        print(f'PNG content: nonwhite pixels = {nonwhite} '
+        print(f'PNG content: nonwhite = {nonwhite} '
               f'({"HAS CONTENT" if nonwhite > 10000 else "BLANK!"})')
     pdf = os.path.join(OUT, 'v.pdf')
     if os.path.exists(pdf):
-        head = open(pdf, 'rb').read(8)
-        print('PDF header:', head[:8])
-        print('PDF size:', os.path.getsize(pdf))
+        data = open(pdf, 'rb').read()
+        print('PDF header:', data[:8])
+        print('PDF JPEG embedded:', data.find(b'\xff\xd8') >= 0,
+              '| size:', len(data))
     tif = os.path.join(OUT, 'v.tif')
     if os.path.exists(tif):
-        try:
-            im = Image.open(tif)
-            arr = np.array(im.convert('L'))
-            print(f'TIF PIL ok: {im.format} {im.size}, nonwhite={((arr<240).sum())}')
-        except Exception as e:
-            print('TIF open err:', e)
+        im = Image.open(tif)
+        arr = np.array(im.convert('L'))
+        print(f'TIF PIL ok: {im.format} {im.size}, '
+              f'nonwhite={((arr < 240).sum())}')
 
 
 if __name__ == '__main__':

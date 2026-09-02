@@ -29,14 +29,13 @@ VIEW_ANGLES = {
 }
 
 
-def export_html(out: str = None, with_labels: bool = True):
-    """生成交互 HTML (trame viewer, 3D场景可旋转; vtkTextActor3D 标签跟随旋转)."""
+def export_html(out: str = None):
+    """生成交互 HTML (trame viewer, 3D场景可旋转; 无文字标签, Yeo-7 配色)."""
     import sys as _s
     _s.path.insert(0, os.path.join(os.path.dirname(__file__)))
     spec = atlases.get_spec('brainnetome', 'insula')
     pl = visualize_subregions(spec, return_plotter=True,
-                              add_labels=with_labels,
-                              label_mode='text3d',   # 3D标签 跟随旋转
+                              add_labels=False,      # 无悬浮文字标签
                               show_legend=False)
     out = out or os.path.join(IMG, 'insula_viewer.html')
     pl.export_html(out)
