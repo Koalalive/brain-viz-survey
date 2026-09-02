@@ -89,20 +89,28 @@ def bna_insula_spec() -> AtlasSpec:
     bm, bs = allb.mean(axis=0), allb.std(axis=0)
 
     subregions: List[Subregion] = []
+    left_centers: Dict[str, np.ndarray] = {}
     for key, d in BNA_INS_DATA.items():
         v = np.array(d['vox'], dtype=float)
         vn = (v - bm) / bs
-        is_left = key.startswith('Ins_L')
-        rm, rs = (rm_l, rs_l) if is_left else (rm_r, rs_r)
-        x = rm[0] + vn[0] * rs[0] * 0.02
-        y = rm[1] + vn[1] * rs[1] * 0.6
-        z = rm[2] + vn[2] * rs[2] * 0.6
+        if key.startswith('Ins_L'):
+            rm, rs = rm_l, rs_l
+            x = rm[0] + vn[0] * rs[0] * 0.02
+            y = rm[1] + vn[1] * rs[1] * 0.6
+            z = rm[2] + vn[2] * rs[2] * 0.6
+            mni = np.array([x, y, z])
+            left_centers[key] = mni
+        else:
+            # 右侧 = 左侧精确镜像 (x 取反), 构造上强制左右对称,
+            # 避免 AAL mask 左右均值不对称 (rm_l[0]=-35.5 vs rm_r[0]=+38.8) 引入偏差
+            lc = left_centers['Ins_L_' + key.split('_')[-1]]
+            mni = np.array([-lc[0], lc[1], lc[2]])
         # 唯一 name (L/R 前缀) 供 Voronoi 分区; full_name/short 供展示
         subregions.append(Subregion(
             name=f'{key}',  # Ins_L_1 ... Ins_R_6 (唯一)
             full_name=d['full'],
             short=d['short'],
-            mni_center=np.array([x, y, z]), yeo7=d['yeo']))
+            mni_center=mni, yeo7=d['yeo']))
     return AtlasSpec(
         atlas_name='brainnetome',
         region_name='insula',
